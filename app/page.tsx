@@ -7,11 +7,13 @@ import { ArrowRight, CalendarDays, ClipboardList, FileText, Flag, Moon, PieChart
 
 type Role = "ops" | "moderator";
 type Session = { name: string; role: Role };
-type Meeting = { id: string; title: string; datetime: string; agenda: string; link: string };
+type Meeting = { id: string; title: string; datetime: string; agenda: string; link: string; status?: "active" | "completed" };
 type Task = { id: string; title: string; type: "question" | "excel" | "research"; detail: string; due: string; assignedTo: string; status: "pending" | "completed"; response?: string; fileName?: string };
-type Announcement = { id: string; message: string; urgent: boolean; pinned: boolean; createdAt: string };
+type Announcement = { id: string; message: string; urgent: boolean; pinned: boolean; createdAt: string; audience?: "specific" | "general"; recipient?: string };
 type LeaderboardItem = { name: string; position: number; points: number; status: string };
 type OpsSectionId = "overview" | "meetings" | "tasks" | "forms" | "leaderboard" | "announcements" | "settings";
+type TaskAssignmentMode = "specific" | "general";
+type AnnouncementAudienceMode = "specific" | "general";
 
 const OPS_PASSWORD = "HOO@07";
 const MODERATOR_NAMES = ["Harshul", "Harini", "Harshith", "Praneeth", "Sunidhi", "Utkarsh"];
@@ -33,6 +35,7 @@ const INITIAL_LEADERBOARD: LeaderboardItem[] = [
   { name: "Utkarsh", position: 6, points: 278, status: "Stable" },
 ];
 const createId = () => `id-${Math.random().toString(36).slice(2, 10)}`;
+const isMeetingActive = (meeting: Meeting) => meeting.status !== "completed";
 const containerVariants: Variants = { 
   hidden: { opacity: 0 }, 
   visible: { 
@@ -60,8 +63,12 @@ const itemVariants: Variants = {
 };
 
 export default function Home() {
-  const [mounted, setMounted] = useState(false);
-  const [theme, setTheme] = useState<"dark" | "colorful">("dark");
+  const mounted = true;
+  const [theme, setTheme] = useState<"dark" | "colorful">(() => {
+    if (typeof window === "undefined") return "dark";
+    const storedTheme = window.localStorage.getItem("vps-ops-theme");
+    return storedTheme === "dark" || storedTheme === "colorful" ? storedTheme : "dark";
+  });
   const [session, setSession] = useState<Session | null>(null);
   const [openModeratorModal, setOpenModeratorModal] = useState(false);
   const [openOpsModal, setOpenOpsModal] = useState(false);
@@ -74,14 +81,23 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [opsName, setOpsName] = useState("");
   const [opsPassword, setOpsPassword] = useState("");
-  const [googleFormLink, setGoogleFormLink] = useState("");
+  const [googleFormLink, setGoogleFormLink] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("vps-ops-google-form") ?? "";
+  });
   const [meetingDraft, setMeetingDraft] = useState<Partial<Meeting>>({ title: "", datetime: "", agenda: "", link: "" });
   const [taskDraft, setTaskDraft] = useState<Partial<Task>>({ title: "", type: "question", detail: "", due: "", assignedTo: MODERATOR_NAMES[0] });
+  const [taskAssignmentMode, setTaskAssignmentMode] = useState<TaskAssignmentMode>("specific");
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [announcementDraft, setAnnouncementDraft] = useState("");
+  const [announcementAudienceMode, setAnnouncementAudienceMode] = useState<AnnouncementAudienceMode>("specific");
+  const [announcementRecipient, setAnnouncementRecipient] = useState(MODERATOR_NAMES[0]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>(INITIAL_LEADERBOARD);
+  const [newParticipantName, setNewParticipantName] = useState("");
+  const [newParticipantPoints, setNewParticipantPoints] = useState("0");
 
   // Cursor tracking
   useEffect(() => {
@@ -97,28 +113,68 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    setMounted(true);
-    const storedTheme = localStorage.getItem("vps-ops-theme");
-    if (storedTheme === "dark" || storedTheme === "colorful") setTheme(storedTheme);
-    
-    const restoreData = (key: string, setter: (v: any) => void) => {
-      const stored = localStorage.getItem(key);
+    const restoreSession = () => {
+      const stored = localStorage.getItem("vps-ops-session");
       if (stored) {
         try {
-          setter(JSON.parse(stored));
+          setSession(JSON.parse(stored) as Session | null);
         } catch {
-          localStorage.removeItem(key);
+          localStorage.removeItem("vps-ops-session");
         }
       }
     };
-    
-    restoreData("vps-ops-session", setSession);
-    restoreData("vps-ops-meetings", setMeetings);
-    restoreData("vps-ops-tasks", setTasks);
-    restoreData("vps-ops-announcements", setAnnouncements);
-    const form = localStorage.getItem("vps-ops-google-form");
-    if (form) setGoogleFormLink(form);
-    restoreData("vps-ops-leaderboard", (v) => Array.isArray(v) && setLeaderboard(v));
+
+    const restoreMeetings = () => {
+      const stored = localStorage.getItem("vps-ops-meetings");
+      if (stored) {
+        try {
+          setMeetings(JSON.parse(stored) as Meeting[]);
+        } catch {
+          localStorage.removeItem("vps-ops-meetings");
+        }
+      }
+    };
+
+    const restoreTasks = () => {
+      const stored = localStorage.getItem("vps-ops-tasks");
+      if (stored) {
+        try {
+          setTasks(JSON.parse(stored) as Task[]);
+        } catch {
+          localStorage.removeItem("vps-ops-tasks");
+        }
+      }
+    };
+
+    const restoreAnnouncements = () => {
+      const stored = localStorage.getItem("vps-ops-announcements");
+      if (stored) {
+        try {
+          setAnnouncements(JSON.parse(stored) as Announcement[]);
+        } catch {
+          localStorage.removeItem("vps-ops-announcements");
+        }
+      }
+    };
+
+    const restoreLeaderboard = () => {
+      const stored = localStorage.getItem("vps-ops-leaderboard");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as LeaderboardItem[];
+          if (Array.isArray(parsed)) setLeaderboard(parsed);
+        } catch {
+          localStorage.removeItem("vps-ops-leaderboard");
+        }
+      }
+    };
+
+    restoreSession();
+    restoreMeetings();
+    restoreTasks();
+    restoreAnnouncements();
+
+    restoreLeaderboard();
   }, []);
 
   useEffect(() => {
@@ -159,11 +215,65 @@ export default function Home() {
 
   const pendingTasks = useMemo(() => tasks.filter((item) => item.status === "pending"), [tasks]);
   const completedTasks = useMemo(() => tasks.filter((item) => item.status === "completed"), [tasks]);
-  const activeMeeting = useMemo(() => {
-    const sorted = [...meetings].sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
-    return sorted[0] ?? null;
+  const moderatorVisibleTasks = useMemo(
+    () => tasks.filter((item) => item.status === "pending" && (item.assignedTo === "All Moderators" || item.assignedTo === session?.name)),
+    [tasks, session?.name]
+  );
+  const activeMeetings = useMemo(() => {
+    return [...meetings]
+      .filter(isMeetingActive)
+      .sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
   }, [meetings]);
+  const activeMeeting = useMemo(() => activeMeetings[0] ?? null, [activeMeetings]);
   const moderatorPosition = useMemo(() => leaderboard.find((item) => item.name === session?.name)?.position ?? null, [leaderboard, session]);
+
+  const normalizeLeaderboard = (items: LeaderboardItem[]) => {
+    const sorted = [...items]
+      .map((item) => ({ ...item, points: Number.isFinite(item.points) ? item.points : 0 }))
+      .sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+
+    return sorted.map((item, index) => ({ ...item, position: index + 1 }));
+  };
+
+  const handleAddParticipant = () => {
+    const trimmedName = newParticipantName.trim();
+    const parsedPoints = Number(newParticipantPoints);
+
+    if (!trimmedName) {
+      toast.error("Enter a participant name.");
+      return;
+    }
+
+    if (!Number.isFinite(parsedPoints)) {
+      toast.error("Enter a valid point value.");
+      return;
+    }
+
+    setLeaderboard((current) => normalizeLeaderboard([...current, { name: trimmedName, position: 0, points: parsedPoints, status: "New" }]));
+    setNewParticipantName("");
+    setNewParticipantPoints("0");
+    toast.success("Participant added to leaderboard.");
+  };
+
+  const handleRemoveParticipant = (participantName: string) => {
+    setLeaderboard((current) => normalizeLeaderboard(current.filter((item) => item.name !== participantName)));
+    toast.success("Participant removed from leaderboard.");
+  };
+
+  const handleAdjustParticipantPoints = (participantName: string, delta: number) => {
+    setLeaderboard((current) =>
+      normalizeLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: item.points + delta } : item)))
+    );
+  };
+
+  const handleEditParticipantPoints = (participantName: string, value: string) => {
+    const parsedPoints = Number(value);
+    if (!Number.isFinite(parsedPoints)) return;
+
+    setLeaderboard((current) =>
+      normalizeLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: parsedPoints } : item)))
+    );
+  };
 
   const handleThemeToggle = () => setTheme((current) => (current === "dark" ? "colorful" : "dark"));
 
@@ -222,6 +332,7 @@ export default function Home() {
         datetime: meetingDraft.datetime!.trim(),
         agenda: meetingDraft.agenda!.trim(),
         link: meetingDraft.link!.trim(),
+        status: "active",
       },
       ...current,
     ]);
@@ -230,26 +341,93 @@ export default function Home() {
     toast.success("Meeting created.");
   };
 
-  const handleCreateTask = () => {
+  const handleCompleteMeeting = (meetingId: string) => {
+    setMeetings((current) =>
+      current.map((meeting) =>
+        meeting.id === meetingId ? { ...meeting, status: "completed", link: "" } : meeting
+      )
+    );
+    toast.success("Meeting completed and link discarded.");
+  };
+
+  const resetTaskDraft = () => {
+    setTaskDraft({ title: "", type: "question", detail: "", due: "", assignedTo: MODERATOR_NAMES[0] });
+    setTaskAssignmentMode("specific");
+    setEditingTaskId(null);
+  };
+
+  const openCreateTaskModal = () => {
+    resetTaskDraft();
+    setOpenTaskModal(true);
+  };
+
+  const openEditTaskModal = (task: Task) => {
+    setEditingTaskId(task.id);
+    setTaskDraft({
+      title: task.title,
+      type: task.type,
+      detail: task.detail,
+      due: task.due,
+      assignedTo: task.assignedTo === "All Moderators" ? MODERATOR_NAMES[0] : task.assignedTo,
+    });
+    setTaskAssignmentMode(task.assignedTo === "All Moderators" ? "general" : "specific");
+    setOpenTaskModal(true);
+  };
+
+  const handleSaveTask = () => {
     if (!taskDraft.title?.trim() || !taskDraft.detail?.trim() || !taskDraft.due?.trim()) {
       toast.error("Complete every field.");
       return;
     }
-    setTasks((current) => [
-      {
-        id: createId(),
-        title: taskDraft.title!.trim(),
-        type: taskDraft.type as "question" | "excel" | "research",
-        detail: taskDraft.detail!.trim(),
-        due: taskDraft.due!.trim(),
-        assignedTo: taskDraft.assignedTo || MODERATOR_NAMES[0],
-        status: "pending",
-      },
-      ...current,
-    ]);
-    setTaskDraft({ title: "", type: "question", detail: "", due: "", assignedTo: MODERATOR_NAMES[0] });
+
+    const assignedTo = taskAssignmentMode === "specific"
+      ? (taskDraft.assignedTo || MODERATOR_NAMES[0])
+      : "All Moderators";
+
+    if (editingTaskId) {
+      setTasks((current) =>
+        current.map((item) =>
+          item.id === editingTaskId
+            ? {
+                ...item,
+                title: taskDraft.title!.trim(),
+                type: taskDraft.type as "question" | "excel" | "research",
+                detail: taskDraft.detail!.trim(),
+                due: taskDraft.due!.trim(),
+                assignedTo,
+              }
+            : item
+        )
+      );
+      toast.success("Task updated.");
+    } else {
+      setTasks((current) => [
+        {
+          id: createId(),
+          title: taskDraft.title!.trim(),
+          type: taskDraft.type as "question" | "excel" | "research",
+          detail: taskDraft.detail!.trim(),
+          due: taskDraft.due!.trim(),
+          assignedTo,
+          status: "pending",
+        },
+        ...current,
+      ]);
+      toast.success(taskAssignmentMode === "specific" ? "Task assigned to moderator." : "General task published to all moderators.");
+    }
+
+    resetTaskDraft();
     setOpenTaskModal(false);
-    toast.success("Task assigned.");
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    setTasks((current) => current.filter((item) => item.id !== taskId));
+    toast.success("Task deleted.");
+  };
+
+  const handleRemoveCompletedTasks = () => {
+    setTasks((current) => current.filter((item) => item.status !== "completed"));
+    toast.success("Completed tasks removed.");
   };
 
   const handleSaveGoogleForm = () => {
@@ -267,6 +445,10 @@ export default function Home() {
       toast.error("Enter a message.");
       return;
     }
+
+    const audience = announcementAudienceMode === "specific" ? "specific" : "general";
+    const recipient = audience === "specific" ? announcementRecipient : undefined;
+
     setAnnouncements((current) => [
       {
         id: createId(),
@@ -274,12 +456,16 @@ export default function Home() {
         urgent: false,
         pinned: false,
         createdAt: new Date().toISOString(),
+        audience,
+        recipient,
       },
       ...current,
     ]);
     setAnnouncementDraft("");
+    setAnnouncementAudienceMode("specific");
+    setAnnouncementRecipient(MODERATOR_NAMES[0]);
     setOpenAnnouncementModal(false);
-    toast.success("Announcement posted.");
+    toast.success(audience === "specific" ? "Announcement sent to moderator." : "General announcement posted.");
   };
 
   const toggleAnnouncementPin = (announcementId: string) => {
@@ -413,8 +599,8 @@ export default function Home() {
             </div>
             <div className="rounded-xl glass premium-border p-6 hover:bg-[var(--panel-hover)] smooth-transition">
               <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Active Tasks</p>
-              <p className="mt-3 text-2xl font-light text-[var(--text)]">{pendingTasks.length}</p>
-              <p className="mt-2 text-xs text-[var(--text-secondary)]">Awaiting submission</p>
+              <p className="mt-3 text-2xl font-light text-[var(--text)]">{moderatorVisibleTasks.length}</p>
+              <p className="mt-2 text-xs text-[var(--text-secondary)]">Assigned to you</p>
             </div>
           </div>
         </div>
@@ -443,15 +629,18 @@ export default function Home() {
           <div className="rounded-2xl glass premium-border p-8 hover-lift">
             <div className="space-y-4">
               <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Tasks</p>
-              {pendingTasks.length ? (
+              {moderatorVisibleTasks.length ? (
                 <div className="space-y-3">
-                  {pendingTasks.map((task) => (
+                  {moderatorVisibleTasks.map((task) => (
                     <div key={task.id} className="rounded-lg glass premium-border p-4 hover:bg-[var(--panel-hover)] smooth-transition">
                       <div className="space-y-3">
                         <div className="flex items-start justify-between gap-4">
                           <div>
                             <p className="text-xs text-[var(--muted)]">{task.type.toUpperCase()}</p>
                             <p className="mt-1 font-light text-[var(--text)]">{task.title}</p>
+                            <p className="mt-1 text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                              {task.assignedTo === "All Moderators" ? "Visible to all moderators" : `Assigned to ${task.assignedTo}`}
+                            </p>
                           </div>
                           <span className="text-xs text-[var(--muted)]">Due {new Date(task.due).toLocaleDateString()}</span>
                         </div>
@@ -468,7 +657,7 @@ export default function Home() {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-[var(--text-secondary)]">All clear.</p>
+                <p className="text-sm text-[var(--text-secondary)]">No tasks assigned to you.</p>
               )}
             </div>
           </div>
@@ -539,7 +728,7 @@ export default function Home() {
                 <h2 className="mt-2 text-3xl font-light text-[var(--text)]">{section?.label}</h2>
               </div>
               {activeSection === "meetings" && <button type="button" onClick={() => setOpenMeetingModal(true)} className="glass-button glass-hover px-6 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)] premium-border-hover">New</button>}
-              {activeSection === "tasks" && <button type="button" onClick={() => setOpenTaskModal(true)} className="glass-button glass-hover px-6 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)] premium-border-hover">Assign</button>}
+              {activeSection === "tasks" && <button type="button" onClick={openCreateTaskModal} className="glass-button glass-hover px-6 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)] premium-border-hover">Assign</button>}
               {activeSection === "announcements" && <button type="button" onClick={() => setOpenAnnouncementModal(true)} className="glass-button glass-hover px-6 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)] premium-border-hover">Post</button>}
               {activeSection === "forms" && <button type="button" onClick={() => setOpenFormModal(true)} className="glass-button glass-hover px-6 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)] premium-border-hover">Add</button>}
             </div>
@@ -555,8 +744,8 @@ export default function Home() {
 
           {activeSection === "meetings" && (
             <div className="space-y-4">
-              {meetings.length ? (
-                meetings.map((meeting) => (
+              {activeMeetings.length ? (
+                activeMeetings.map((meeting) => (
                   <div key={meeting.id} className="rounded-xl glass premium-border p-6 hover-lift">
                     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                       <div className="flex-1">
@@ -564,7 +753,10 @@ export default function Home() {
                         <h3 className="mt-2 font-light text-[var(--text)]">{meeting.title}</h3>
                         <p className="mt-2 text-sm text-[var(--text-secondary)]">{meeting.agenda}</p>
                       </div>
-                      <a href={meeting.link} target="_blank" rel="noreferrer" className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">Join</a>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <a href={meeting.link} target="_blank" rel="noreferrer" className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">Join</a>
+                        <button type="button" onClick={() => handleCompleteMeeting(meeting.id)} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">Complete</button>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -576,17 +768,26 @@ export default function Home() {
 
           {activeSection === "tasks" && (
             <div className="space-y-4">
+              <div className="flex justify-end">
+                <button type="button" onClick={handleRemoveCompletedTasks} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                  Remove completed
+                </button>
+              </div>
               {tasks.length ? (
                 tasks.map((task) => (
                   <div key={task.id} className="rounded-xl glass premium-border p-6 hover-lift">
                     <div className="space-y-3">
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="flex-1">
-                          <p className="text-xs text-[var(--muted)]">{task.type.toUpperCase()} → {task.assignedTo}</p>
+                          <p className="text-xs text-[var(--muted)]">{task.type.toUpperCase()} → {task.assignedTo === "All Moderators" ? "Visible to all moderators" : task.assignedTo}</p>
                           <h3 className="mt-2 font-light text-[var(--text)]">{task.title}</h3>
                           <p className="mt-2 text-sm text-[var(--text-secondary)]">{task.detail}</p>
                         </div>
-                        <span className="text-xs px-3 py-1 rounded-full bg-[var(--panel-hover)] text-[var(--text)]">{task.status}</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs px-3 py-1 rounded-full bg-[var(--panel-hover)] text-[var(--text)]">{task.status}</span>
+                          <button type="button" onClick={() => openEditTaskModal(task)} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)]">Edit</button>
+                          <button type="button" onClick={() => handleDeleteTask(task.id)} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)]">Delete</button>
+                        </div>
                       </div>
                       <p className="text-xs text-[var(--muted)]">Due {new Date(task.due).toLocaleDateString()}</p>
                     </div>
@@ -637,25 +838,72 @@ export default function Home() {
 
           {activeSection === "leaderboard" && (
             <div className="rounded-xl glass premium-border p-8 hover-lift">
-              <div className="space-y-3">
+              <div className="space-y-6">
                 <div className="mb-4 pb-4 border-b border-[var(--border)]">
                   <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Competition Standings</p>
+                  <p className="mt-2 text-sm text-[var(--text-secondary)]">OPS-only controls for participant management and score updates.</p>
                 </div>
-                {leaderboard.map((item, idx) => {
-                  const trend = idx === 0 ? <TrendingUp className="w-4 h-4 text-green-400" /> : idx === leaderboard.length - 1 ? <TrendingDown className="w-4 h-4 text-red-400" /> : <span className="text-[var(--text-secondary)]">→</span>;
-                  return (
-                    <div key={item.name} className="flex items-center justify-between py-3 px-3 rounded hover:bg-[var(--panel-hover)] smooth-transition">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-bold text-[var(--accent)] w-6">#{item.position}</span>
-                        <span className="font-light text-[var(--text)]">{item.name}</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-light text-[var(--text)]">{item.points}</span>
-                        {trend}
-                      </div>
+
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-hover)]/40 p-4 space-y-3">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                    <div className="flex-1">
+                      <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium mb-2">Participant</label>
+                      <input
+                        type="text"
+                        value={newParticipantName}
+                        onChange={(event) => setNewParticipantName(event.target.value)}
+                        placeholder="Add participant"
+                        className="w-full glass-input px-4 py-3 rounded-lg text-sm"
+                      />
                     </div>
-                  );
-                })}
+                    <div className="w-full md:w-32">
+                      <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium mb-2">Marks</label>
+                      <input
+                        type="number"
+                        value={newParticipantPoints}
+                        onChange={(event) => setNewParticipantPoints(event.target.value)}
+                        className="w-full glass-input px-4 py-3 rounded-lg text-sm"
+                      />
+                    </div>
+                    <button type="button" onClick={handleAddParticipant} className="glass-button glass-hover px-4 py-3 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {leaderboard.map((item, idx) => {
+                    const trend = idx === 0 ? <TrendingUp className="w-4 h-4 text-green-400" /> : idx === leaderboard.length - 1 ? <TrendingDown className="w-4 h-4 text-red-400" /> : <span className="text-[var(--text-secondary)]">→</span>;
+                    return (
+                      <div key={item.name} className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--panel)]/50 p-4 md:flex-row md:items-center md:justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="text-xs font-bold text-[var(--accent)] w-6">#{item.position}</span>
+                          <span className="font-light text-[var(--text)] truncate">{item.name}</span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 md:gap-3">
+                          <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
+                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -5)} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)]">−5</button>
+                            <input
+                              type="number"
+                              value={item.points}
+                              onChange={(event) => handleEditParticipantPoints(item.name, event.target.value)}
+                              className="w-20 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none"
+                            />
+                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 5)} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)]">+5</button>
+                          </div>
+
+                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -1)} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)]">−1</button>
+                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 1)} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)]">+1</button>
+                          <button type="button" onClick={() => handleRemoveParticipant(item.name)} className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
+                            Remove
+                          </button>
+                          {trend}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
@@ -686,11 +934,11 @@ export default function Home() {
               <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">VPSMUN</p>
               <h1 className="text-lg font-light text-[var(--text)]">Command</h1>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4 min-w-0 relative z-20">
               <button
                 type="button"
                 onClick={handleThemeToggle}
-                className="inline-flex items-center justify-center w-10 h-10 rounded-full glass-button glass-hover border border-[var(--border)] hover-lift"
+                className="inline-flex items-center justify-center w-10 h-10 rounded-full glass-button glass-hover border border-[var(--border)] hover-lift shrink-0"
               >
                 {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
@@ -698,14 +946,14 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setOpenOpsModal(true)}
-                  className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition px-4 py-2 rounded-full hover:bg-[var(--panel-hover)]"
+                  className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition px-4 py-2 rounded-full hover:bg-[var(--panel-hover)] border border-transparent"
                   title="Executive Access"
                 >
                   OPS
                 </button>
               ) : (
-                <div className="flex items-center gap-3 glass-button glass-hover px-4 py-2 rounded-full border border-[var(--border)] smooth-transition">
-                  <span className="text-sm font-light text-[var(--text)]">{session.name}</span>
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3 glass-button glass-hover px-3 sm:px-4 py-2 rounded-full border border-[var(--border)] smooth-transition">
+                  <span className="text-sm font-light text-[var(--text)] truncate max-w-[8rem] sm:max-w-none">{session.name}</span>
                   <button
                     type="button"
                     onClick={handleSignOut}
@@ -731,14 +979,14 @@ export default function Home() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md px-4"
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-md px-3 py-4 sm:px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full max-w-md rounded-2xl glass premium-border p-8 premium-shadow-lg"
+              className="relative z-[70] w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl glass premium-border p-6 sm:p-8 premium-shadow-lg"
             >
               <div className="space-y-6">
                 <div>
@@ -748,13 +996,16 @@ export default function Home() {
                 <form onSubmit={handleModeratorLogin} className="space-y-4">
                   <div>
                     <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium mb-2">Identity</label>
-                    <select value={selectedName} onChange={(event) => setSelectedName(event.target.value)} className="w-full glass-input px-4 py-3 rounded-lg text-sm">
-                      {MODERATOR_NAMES.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative z-20">
+                      <select value={selectedName} onChange={(event) => setSelectedName(event.target.value)} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
+                        {MODERATOR_NAMES.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--muted)]">▾</span>
+                    </div>
                   </div>
                   <div>
                     <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium mb-2">Passcode</label>
@@ -778,14 +1029,14 @@ export default function Home() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4"
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-md px-3 py-4 sm:px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full max-w-md rounded-2xl glass premium-border p-8 premium-shadow-lg border-[var(--accent)]/30"
+              className="relative z-[70] w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl glass premium-border p-6 sm:p-8 premium-shadow-lg border-[var(--accent)]/30"
             >
               <div className="space-y-6">
                 <div>
@@ -856,14 +1107,14 @@ export default function Home() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md px-4"
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-md px-3 py-4 sm:px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full max-w-md rounded-2xl glass premium-border p-8 premium-shadow-lg"
+              className="relative z-[70] w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl glass premium-border p-6 sm:p-8 premium-shadow-lg"
             >
               <div className="space-y-6">
                 <div>
@@ -872,25 +1123,46 @@ export default function Home() {
                 </div>
                 <div className="space-y-4">
                   <input type="text" value={taskDraft.title || ""} onChange={(e) => setTaskDraft((c) => ({ ...c, title: e.target.value }))} placeholder="Task title" className="w-full glass-input px-4 py-3 rounded-lg text-sm" />
-                  <select value={taskDraft.type} onChange={(e) => setTaskDraft((c) => ({ ...c, type: e.target.value as any }))} className="w-full glass-input px-4 py-3 rounded-lg text-sm">
+                  <div className="relative z-20">
+                    <select value={taskDraft.type} onChange={(e) => setTaskDraft((c) => ({ ...c, type: e.target.value as Task["type"] }))} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
                     <option value="question">Question</option>
                     <option value="excel">Excel</option>
                     <option value="research">Research</option>
-                  </select>
+                    </select>
+                    <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--muted)]">▾</span>
+                  </div>
                   <input type="date" value={taskDraft.due || ""} onChange={(e) => setTaskDraft((c) => ({ ...c, due: e.target.value }))} className="w-full glass-input px-4 py-3 rounded-lg text-sm" />
-                  <select value={taskDraft.assignedTo} onChange={(e) => setTaskDraft((c) => ({ ...c, assignedTo: e.target.value }))} className="w-full glass-input px-4 py-3 rounded-lg text-sm">
-                    {MODERATOR_NAMES.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="space-y-2">
+                    <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Assignment</label>
+                    <div className="relative z-20">
+                      <select value={taskAssignmentMode} onChange={(e) => setTaskAssignmentMode(e.target.value as TaskAssignmentMode)} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
+                        <option value="specific">Specific moderator</option>
+                        <option value="general">All moderators</option>
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--muted)]">▾</span>
+                    </div>
+                  </div>
+                  {taskAssignmentMode === "specific" && (
+                    <div className="space-y-2">
+                      <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Moderator</label>
+                      <div className="relative z-20">
+                        <select value={taskDraft.assignedTo} onChange={(e) => setTaskDraft((c) => ({ ...c, assignedTo: e.target.value }))} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
+                          {MODERATOR_NAMES.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--muted)]">▾</span>
+                      </div>
+                    </div>
+                  )}
                   <textarea rows={4} value={taskDraft.detail || ""} onChange={(e) => setTaskDraft((c) => ({ ...c, detail: e.target.value }))} placeholder="Details" className="w-full glass-input px-4 py-3 rounded-lg text-sm" />
-                  <button type="button" onClick={handleCreateTask} className="w-full bg-[var(--accent)] hover:bg-blue-600 text-white font-medium uppercase tracking-widest text-sm py-3 rounded-lg transition smooth-transition hover:shadow-lg hover:shadow-blue-500/20">
-                    Assign
+                  <button type="button" onClick={handleSaveTask} className="w-full bg-[var(--accent)] hover:bg-blue-600 text-white font-medium uppercase tracking-widest text-sm py-3 rounded-lg transition smooth-transition hover:shadow-lg hover:shadow-blue-500/20">
+                    {editingTaskId ? "Save changes" : "Assign"}
                   </button>
                 </div>
-                <button type="button" onClick={() => setOpenTaskModal(false)} className="w-full text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition py-2 smooth-transition">
+                <button type="button" onClick={() => { setOpenTaskModal(false); resetTaskDraft(); }} className="w-full text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition py-2 smooth-transition">
                   Close
                 </button>
               </div>
@@ -953,6 +1225,31 @@ export default function Home() {
                   <h2 className="mt-2 text-2xl font-light text-[var(--text)]">Announcement</h2>
                 </div>
                 <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Audience</label>
+                    <div className="relative z-20">
+                      <select value={announcementAudienceMode} onChange={(e) => setAnnouncementAudienceMode(e.target.value as AnnouncementAudienceMode)} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
+                        <option value="specific">Specific moderator</option>
+                        <option value="general">All moderators</option>
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--muted)]">▾</span>
+                    </div>
+                  </div>
+                  {announcementAudienceMode === "specific" && (
+                    <div className="space-y-2">
+                      <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Moderator</label>
+                      <div className="relative z-20">
+                        <select value={announcementRecipient} onChange={(e) => setAnnouncementRecipient(e.target.value)} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
+                          {MODERATOR_NAMES.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--muted)]">▾</span>
+                      </div>
+                    </div>
+                  )}
                   <textarea rows={5} value={announcementDraft} onChange={(e) => setAnnouncementDraft(e.target.value)} placeholder="Message" className="w-full glass-input px-4 py-3 rounded-lg text-sm" />
                   <button type="button" onClick={handlePublishAnnouncement} className="w-full bg-[var(--accent)] hover:bg-blue-600 text-white font-medium uppercase tracking-widest text-sm py-3 rounded-lg transition smooth-transition hover:shadow-lg hover:shadow-blue-500/20">
                     Publish

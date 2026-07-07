@@ -49,14 +49,37 @@ type DashboardState = {
 
 const FIREBASE_COLLECTION = "ops-center";
 const FIREBASE_DOCUMENT = "dashboard";
-const getFirebaseConfig = () => ({
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? "",
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ?? "",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? "",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ?? "",
-});
+const readEnvValue = (value: string | undefined) => value?.trim() ?? "";
+const getFirebaseConfig = () => {
+  const configFromEnv = readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_CONFIG);
+  if (configFromEnv) {
+    try {
+      const parsedConfig = JSON.parse(configFromEnv);
+      if (parsedConfig && typeof parsedConfig === "object") {
+        return {
+          apiKey: readEnvValue(parsedConfig.apiKey),
+          authDomain: readEnvValue(parsedConfig.authDomain),
+          projectId: readEnvValue(parsedConfig.projectId),
+          storageBucket: readEnvValue(parsedConfig.storageBucket),
+          messagingSenderId: readEnvValue(parsedConfig.messagingSenderId),
+          appId: readEnvValue(parsedConfig.appId),
+        };
+      }
+    } catch {
+      // Fall back to the individual env variables below.
+    }
+  }
+
+  return {
+    apiKey: readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_API_KEY),
+    authDomain: readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN),
+    projectId: readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID),
+    storageBucket: readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET),
+    messagingSenderId: readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID),
+    appId: readEnvValue(process.env.NEXT_PUBLIC_FIREBASE_APP_ID),
+  };
+};
+const hasFirebaseConfig = (config: ReturnType<typeof getFirebaseConfig>) => Boolean(config.projectId && config.apiKey && config.appId);
 
 const createId = () => `id-${Math.random().toString(36).slice(2, 10)}`;
 const normalizeText = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
@@ -175,7 +198,7 @@ export default function Home() {
   });
   const [newParticipantName, setNewParticipantName] = useState("");
   const [newParticipantPoints, setNewParticipantPoints] = useState("0");
-  const [syncStatus, setSyncStatus] = useState<"local" | "live">(() => (getFirebaseConfig().projectId ? "live" : "local"));
+  const [syncStatus, setSyncStatus] = useState<"local" | "live">(() => (hasFirebaseConfig(getFirebaseConfig()) ? "live" : "local"));
 
   // Cursor tracking
   useEffect(() => {
@@ -258,7 +281,7 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const firebaseConfig = getFirebaseConfig();
-    if (!firebaseConfig.projectId) {
+    if (!hasFirebaseConfig(firebaseConfig)) {
       return;
     }
 
@@ -383,7 +406,7 @@ export default function Home() {
 
     if (typeof window !== "undefined") {
       const firebaseConfig = getFirebaseConfig();
-      if (firebaseConfig.projectId) {
+      if (hasFirebaseConfig(firebaseConfig)) {
         const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const docRef = doc(db, FIREBASE_COLLECTION, FIREBASE_DOCUMENT);

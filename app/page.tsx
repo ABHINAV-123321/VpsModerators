@@ -1,7 +1,9 @@
 "use client";
 
+import { initializeApp, getApps } from "firebase/app";
+import { doc, getFirestore, onSnapshot, setDoc } from "firebase/firestore";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import toast, { Toaster } from "react-hot-toast";
 import { ArrowDown, ArrowRight, ArrowUp, CalendarDays, ClipboardList, FileText, Flag, Lock, Moon, PieChart, Sun, TrendingDown, TrendingUp, Unlock, Users } from "lucide-react";
 
@@ -34,7 +36,78 @@ const INITIAL_LEADERBOARD: LeaderboardItem[] = [
   { name: "Sunidhi", position: 5, points: 301, status: "Alert" },
   { name: "Utkarsh", position: 6, points: 278, status: "Stable" },
 ];
+type DashboardState = {
+  meetings: Meeting[];
+  tasks: Task[];
+  announcements: Announcement[];
+  leaderboard: LeaderboardItem[];
+  leaderboardLocked: boolean;
+  googleFormLink: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+const FIREBASE_COLLECTION = "ops-center";
+const FIREBASE_DOCUMENT = "dashboard";
+const getFirebaseConfig = () => ({
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? "",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "",
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ?? "",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? "",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ?? "",
+});
+
 const createId = () => `id-${Math.random().toString(36).slice(2, 10)}`;
+const normalizeText = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
+const sanitizeMeeting = (meeting: Partial<Meeting> | null | undefined): Meeting => ({
+  id: normalizeText(meeting?.id),
+  title: normalizeText(meeting?.title),
+  datetime: normalizeText(meeting?.datetime),
+  agenda: normalizeText(meeting?.agenda),
+  link: normalizeText(meeting?.link),
+  status: meeting?.status === "completed" ? "completed" : "active",
+});
+const sanitizeTask = (task: Partial<Task> | null | undefined): Task => ({
+  id: normalizeText(task?.id),
+  title: normalizeText(task?.title),
+  type: task?.type === "excel" || task?.type === "research" ? task.type : "question",
+  detail: normalizeText(task?.detail),
+  due: normalizeText(task?.due),
+  assignedTo: normalizeText(task?.assignedTo),
+  status: task?.status === "completed" ? "completed" : "pending",
+  response: normalizeText(task?.response),
+  fileName: normalizeText(task?.fileName),
+});
+const sanitizeAnnouncement = (announcement: Partial<Announcement> | null | undefined): Announcement => ({
+  id: normalizeText(announcement?.id),
+  message: normalizeText(announcement?.message),
+  urgent: Boolean(announcement?.urgent),
+  pinned: Boolean(announcement?.pinned),
+  createdAt: normalizeText(announcement?.createdAt, new Date().toISOString()),
+  audience: announcement?.audience === "specific" ? "specific" : "general",
+  recipient: normalizeText(announcement?.recipient),
+});
+const sanitizeLeaderboardItem = (item: Partial<LeaderboardItem> | null | undefined): LeaderboardItem => ({
+  name: normalizeText(item?.name),
+  position: typeof item?.position === "number" && Number.isFinite(item.position) ? item.position : 0,
+  points: typeof item?.points === "number" && Number.isFinite(item.points) ? item.points : 0,
+  status: normalizeText(item?.status),
+});
+const sanitizeMeetings = (value: unknown): Meeting[] => (Array.isArray(value) ? value.map((item) => sanitizeMeeting(item as Partial<Meeting>)) : []);
+const sanitizeTasks = (value: unknown): Task[] => (Array.isArray(value) ? value.map((item) => sanitizeTask(item as Partial<Task>)) : []);
+const sanitizeAnnouncements = (value: unknown): Announcement[] => (Array.isArray(value) ? value.map((item) => sanitizeAnnouncement(item as Partial<Announcement>)) : []);
+const sanitizeLeaderboard = (value: unknown): LeaderboardItem[] => (Array.isArray(value) ? value.map((item) => sanitizeLeaderboardItem(item as Partial<LeaderboardItem>)) : []);
+const sanitizeDashboardState = (state: Partial<DashboardState>): DashboardState => ({
+  meetings: sanitizeMeetings(state.meetings),
+  tasks: sanitizeTasks(state.tasks),
+  announcements: sanitizeAnnouncements(state.announcements),
+  leaderboard: sanitizeLeaderboard(state.leaderboard),
+  leaderboardLocked: Boolean(state.leaderboardLocked),
+  googleFormLink: normalizeText(state.googleFormLink),
+  updatedAt: normalizeText(state.updatedAt, new Date().toISOString()),
+  updatedBy: normalizeText(state.updatedBy, "OPS"),
+});
 const isMeetingActive = (meeting: Meeting) => meeting.status !== "completed";
 const containerVariants: Variants = { 
   hidden: { opacity: 0 }, 
@@ -102,6 +175,7 @@ export default function Home() {
   });
   const [newParticipantName, setNewParticipantName] = useState("");
   const [newParticipantPoints, setNewParticipantPoints] = useState("0");
+  const [syncStatus, setSyncStatus] = useState<"local" | "live">(() => (getFirebaseConfig().projectId ? "live" : "local"));
 
   // Cursor tracking
   useEffect(() => {
@@ -132,7 +206,7 @@ export default function Home() {
       const stored = localStorage.getItem("vps-ops-meetings");
       if (stored) {
         try {
-          setMeetings(JSON.parse(stored) as Meeting[]);
+          setMeetings(sanitizeMeetings(JSON.parse(stored)));
         } catch {
           localStorage.removeItem("vps-ops-meetings");
         }
@@ -143,7 +217,7 @@ export default function Home() {
       const stored = localStorage.getItem("vps-ops-tasks");
       if (stored) {
         try {
-          setTasks(JSON.parse(stored) as Task[]);
+          setTasks(sanitizeTasks(JSON.parse(stored)));
         } catch {
           localStorage.removeItem("vps-ops-tasks");
         }
@@ -154,7 +228,7 @@ export default function Home() {
       const stored = localStorage.getItem("vps-ops-announcements");
       if (stored) {
         try {
-          setAnnouncements(JSON.parse(stored) as Announcement[]);
+          setAnnouncements(sanitizeAnnouncements(JSON.parse(stored)));
         } catch {
           localStorage.removeItem("vps-ops-announcements");
         }
@@ -166,7 +240,7 @@ export default function Home() {
       if (stored) {
         try {
           const parsed = JSON.parse(stored) as LeaderboardItem[];
-          if (Array.isArray(parsed)) setLeaderboard(parsed);
+          if (Array.isArray(parsed)) setLeaderboard(sanitizeLeaderboard(parsed));
         } catch {
           localStorage.removeItem("vps-ops-leaderboard");
         }
@@ -179,6 +253,44 @@ export default function Home() {
     restoreAnnouncements();
 
     restoreLeaderboard();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const firebaseConfig = getFirebaseConfig();
+    if (!firebaseConfig.projectId) {
+      return;
+    }
+
+    const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const docRef = doc(db, FIREBASE_COLLECTION, FIREBASE_DOCUMENT);
+
+    const unsubscribe = onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setSyncStatus("live");
+          return;
+        }
+
+        const data = snapshot.data() as Partial<DashboardState>;
+        const sanitizedState = sanitizeDashboardState(data);
+        setSyncStatus("live");
+
+        setMeetings(sanitizedState.meetings);
+        setTasks(sanitizedState.tasks);
+        setAnnouncements(sanitizedState.announcements);
+        setLeaderboard(sanitizedState.leaderboard);
+        setLeaderboardLocked(sanitizedState.leaderboardLocked);
+        setGoogleFormLink(sanitizedState.googleFormLink);
+      },
+      () => {
+        setSyncStatus("local");
+      }
+    );
+
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -224,6 +336,7 @@ export default function Home() {
 
   const pendingTasks = useMemo(() => tasks.filter((item) => item.status === "pending"), [tasks]);
   const completedTasks = useMemo(() => tasks.filter((item) => item.status === "completed"), [tasks]);
+  const canManageOpsContent = session?.role === "ops";
   const moderatorVisibleTasks = useMemo(
     () => tasks.filter((item) => item.status === "pending" && (item.assignedTo === "All Moderators" || item.assignedTo === session?.name)),
     [tasks, session?.name]
@@ -249,7 +362,44 @@ export default function Home() {
 
   const reindexLeaderboard = (items: LeaderboardItem[]) => items.map((item, index) => ({ ...item, position: index + 1 }));
 
+  const applyDashboardUpdate = (nextState: Partial<DashboardState>) => {
+    const updatedState: DashboardState = sanitizeDashboardState({
+      meetings: nextState.meetings ?? meetings,
+      tasks: nextState.tasks ?? tasks,
+      announcements: nextState.announcements ?? announcements,
+      leaderboard: nextState.leaderboard ?? leaderboard,
+      leaderboardLocked: nextState.leaderboardLocked ?? leaderboardLocked,
+      googleFormLink: nextState.googleFormLink ?? googleFormLink,
+      updatedAt: new Date().toISOString(),
+      updatedBy: session?.name ?? "OPS",
+    });
+
+    setMeetings(updatedState.meetings);
+    setTasks(updatedState.tasks);
+    setAnnouncements(updatedState.announcements);
+    setLeaderboard(updatedState.leaderboard);
+    setLeaderboardLocked(updatedState.leaderboardLocked);
+    setGoogleFormLink(updatedState.googleFormLink);
+
+    if (typeof window !== "undefined") {
+      const firebaseConfig = getFirebaseConfig();
+      if (firebaseConfig.projectId) {
+        const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const docRef = doc(db, FIREBASE_COLLECTION, FIREBASE_DOCUMENT);
+       setDoc(docRef, updatedState, { merge: true }).catch((err) => {
+  alert(err.message);
+  console.error(err);
+});
+      }
+    }
+  };
+
   const handleAddParticipant = () => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can edit the leaderboard.");
+      return;
+    }
     if (leaderboardLocked) {
       toast.error("The leaderboard is locked.");
       return;
@@ -268,72 +418,42 @@ export default function Home() {
       return;
     }
 
-    setLeaderboard((current) => {
-      const nextPosition = current.length ? Math.max(...current.map((item) => item.position)) + 1 : 1;
-      return sortLeaderboard([...current, { name: trimmedName, position: nextPosition, points: parsedPoints, status: "New" }]);
-    });
+    const currentLeaderboard = leaderboard;
+    const nextPosition = currentLeaderboard.length ? Math.max(...currentLeaderboard.map((item) => item.position)) + 1 : 1;
+    const nextLeaderboard = sortLeaderboard([...currentLeaderboard, { name: trimmedName, position: nextPosition, points: parsedPoints, status: "New" }]);
+
+    applyDashboardUpdate({ leaderboard: nextLeaderboard });
     setNewParticipantName("");
     setNewParticipantPoints("0");
     toast.success("Participant added to leaderboard.");
   };
 
-  const handleRemoveParticipant = (participantName: string) => {
-    if (leaderboardLocked) {
-      toast.error("The leaderboard is locked.");
-      return;
-    }
-
-    setLeaderboard((current) => reindexLeaderboard(sortLeaderboard(current.filter((item) => item.name !== participantName))));
-    toast.success("Participant removed from leaderboard.");
-  };
-
-  const handleAdjustParticipantPoints = (participantName: string, delta: number) => {
-    if (leaderboardLocked) {
-      toast.error("The leaderboard is locked.");
-      return;
-    }
-
-    setLeaderboard((current) => sortLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: item.points + delta } : item))));
-  };
-
   const handleEditParticipantPoints = (participantName: string, value: string) => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can edit the leaderboard.");
+      return;
+    }
     if (leaderboardLocked) return;
 
     const parsedPoints = Number(value);
     if (!Number.isFinite(parsedPoints)) return;
 
-    setLeaderboard((current) => sortLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: parsedPoints } : item))));
+    const nextLeaderboard = sortLeaderboard(leaderboard.map((item) => (item.name === participantName ? { ...item, points: parsedPoints } : item)));
+    applyDashboardUpdate({ leaderboard: nextLeaderboard });
   };
 
   const handleEditParticipantPosition = (participantName: string, value: string) => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can edit the leaderboard.");
+      return;
+    }
     if (leaderboardLocked) return;
 
     const parsedPosition = Number(value);
     if (!Number.isFinite(parsedPosition)) return;
 
-    setLeaderboard((current) => sortLeaderboard(current.map((item) => (item.name === participantName ? { ...item, position: parsedPosition } : item))));
-  };
-
-  const handleMoveParticipant = (participantName: string, direction: -1 | 1) => {
-    if (leaderboardLocked) {
-      toast.error("The leaderboard is locked.");
-      return;
-    }
-
-    setLeaderboard((current) => {
-      const items = [...current];
-      const index = items.findIndex((item) => item.name === participantName);
-      const targetIndex = index + direction;
-
-      if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return current;
-
-      const source = items[index];
-      const target = items[targetIndex];
-      items[index] = { ...source, position: target.position };
-      items[targetIndex] = { ...target, position: source.position };
-
-      return sortLeaderboard(items);
-    });
+    const nextLeaderboard = sortLeaderboard(leaderboard.map((item) => (item.name === participantName ? { ...item, position: parsedPosition } : item)));
+    applyDashboardUpdate({ leaderboard: nextLeaderboard });
   };
 
   const handleThemeToggle = () => setTheme((current) => (current === "dark" ? "colorful" : "dark"));
@@ -382,33 +502,29 @@ export default function Home() {
   };
 
   const handleCreateMeeting = () => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can create events.");
+      return;
+    }
     if (!meetingDraft.title?.trim() || !meetingDraft.datetime?.trim() || !meetingDraft.agenda?.trim() || !meetingDraft.link?.trim()) {
       toast.error("Complete every field.");
       return;
     }
-    setMeetings((current) => [
+    const nextMeetings = [
       {
         id: createId(),
         title: meetingDraft.title!.trim(),
         datetime: meetingDraft.datetime!.trim(),
         agenda: meetingDraft.agenda!.trim(),
         link: meetingDraft.link!.trim(),
-        status: "active",
+        status: "active" as const,
       },
-      ...current,
-    ]);
+      ...meetings,
+    ];
+    applyDashboardUpdate({ meetings: nextMeetings });
     setMeetingDraft({ title: "", datetime: "", agenda: "", link: "" });
     setOpenMeetingModal(false);
     toast.success("Meeting created.");
-  };
-
-  const handleCompleteMeeting = (meetingId: string) => {
-    setMeetings((current) =>
-      current.map((meeting) =>
-        meeting.id === meetingId ? { ...meeting, status: "completed", link: "" } : meeting
-      )
-    );
-    toast.success("Meeting completed and link discarded.");
   };
 
   const resetTaskDraft = () => {
@@ -436,6 +552,10 @@ export default function Home() {
   };
 
   const handleSaveTask = () => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can manage tasks.");
+      return;
+    }
     if (!taskDraft.title?.trim() || !taskDraft.detail?.trim() || !taskDraft.due?.trim()) {
       toast.error("Complete every field.");
       return;
@@ -445,24 +565,24 @@ export default function Home() {
       ? (taskDraft.assignedTo || MODERATOR_NAMES[0])
       : "All Moderators";
 
+    let nextTasks: Task[];
+
     if (editingTaskId) {
-      setTasks((current) =>
-        current.map((item) =>
-          item.id === editingTaskId
-            ? {
-                ...item,
-                title: taskDraft.title!.trim(),
-                type: taskDraft.type as "question" | "excel" | "research",
-                detail: taskDraft.detail!.trim(),
-                due: taskDraft.due!.trim(),
-                assignedTo,
-              }
-            : item
-        )
+      nextTasks = tasks.map((item) =>
+        item.id === editingTaskId
+          ? {
+              ...item,
+              title: taskDraft.title!.trim(),
+              type: taskDraft.type as "question" | "excel" | "research",
+              detail: taskDraft.detail!.trim(),
+              due: taskDraft.due!.trim(),
+              assignedTo,
+            }
+          : item
       );
       toast.success("Task updated.");
     } else {
-      setTasks((current) => [
+      nextTasks = [
         {
           id: createId(),
           title: taskDraft.title!.trim(),
@@ -472,45 +592,63 @@ export default function Home() {
           assignedTo,
           status: "pending",
         },
-        ...current,
-      ]);
+        ...tasks,
+      ];
       toast.success(taskAssignmentMode === "specific" ? "Task assigned to moderator." : "General task published to all moderators.");
     }
 
+    applyDashboardUpdate({ tasks: nextTasks });
     resetTaskDraft();
     setOpenTaskModal(false);
   };
 
   const handleDeleteTask = (taskId: string) => {
-    setTasks((current) => current.filter((item) => item.id !== taskId));
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can manage tasks.");
+      return;
+    }
+    const nextTasks: Task[] = tasks.filter((item) => item.id !== taskId);
+    applyDashboardUpdate({ tasks: nextTasks });
     toast.success("Task deleted.");
   };
 
   const handleRemoveCompletedTasks = () => {
-    setTasks((current) => current.filter((item) => item.status !== "completed"));
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can manage tasks.");
+      return;
+    }
+    const nextTasks: Task[] = tasks.filter((item) => item.status !== "completed");
+    applyDashboardUpdate({ tasks: nextTasks });
     toast.success("Completed tasks removed.");
   };
 
   const handleSaveGoogleForm = () => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can update forms.");
+      return;
+    }
     if (!googleFormLink.trim()) {
       toast.error("Enter a valid form URL.");
       return;
     }
-    setGoogleFormLink(googleFormLink.trim());
+    applyDashboardUpdate({ googleFormLink: googleFormLink.trim() });
     setOpenFormModal(false);
     toast.success("Form link saved.");
   };
 
   const handlePublishAnnouncement = () => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can post announcements.");
+      return;
+    }
     if (!announcementDraft.trim()) {
       toast.error("Enter a message.");
       return;
     }
 
-    const audience = announcementAudienceMode === "specific" ? "specific" : "general";
-    const recipient = audience === "specific" ? announcementRecipient : undefined;
-
-    setAnnouncements((current) => [
+    const audience: Announcement["audience"] = announcementAudienceMode === "specific" ? "specific" : "general";
+    const recipient: Announcement["recipient"] = audience === "specific" ? announcementRecipient : undefined;
+    const nextAnnouncements: Announcement[] = [
       {
         id: createId(),
         message: announcementDraft.trim(),
@@ -520,68 +658,15 @@ export default function Home() {
         audience,
         recipient,
       },
-      ...current,
-    ]);
+      ...announcements,
+    ];
+
+    applyDashboardUpdate({ announcements: nextAnnouncements });
     setAnnouncementDraft("");
     setAnnouncementAudienceMode("specific");
     setAnnouncementRecipient(MODERATOR_NAMES[0]);
     setOpenAnnouncementModal(false);
     toast.success(audience === "specific" ? "Announcement sent to moderator." : "General announcement posted.");
-  };
-
-  const toggleAnnouncementPin = (announcementId: string) => {
-    setAnnouncements((current) =>
-      current.map((item) => (item.id === announcementId ? { ...item, pinned: !item.pinned } : item))
-    );
-  };
-
-  const markTaskComplete = async (taskId: string) => {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    setTasks((current) =>
-      current.map((item) => (item.id === taskId ? { ...item, status: "completed" } : item))
-    );
-    await fetch("/api/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        moderatorName: session?.name ?? "Moderator",
-        task: task.title,
-        timestamp: new Date().toISOString(),
-        attachedFile: task.fileName ?? "N/A",
-        message: "Task completed.",
-      }),
-    }).catch(() => console.error("Submission failed"));
-    toast.success("Task marked complete.");
-  };
-
-  const updateTaskResponse = (taskId: string, value: string) => {
-    setTasks((current) =>
-      current.map((item) => (item.id === taskId ? { ...item, response: value } : item))
-    );
-  };
-
-  const uploadTaskFile = async (event: ChangeEvent<HTMLInputElement>, taskId: string) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setTasks((current) =>
-      current.map((item) =>
-        item.id === taskId ? { ...item, fileName: file.name, status: "completed" } : item
-      )
-    );
-    const task = tasks.find((item) => item.id === taskId);
-    await fetch("/api/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        moderatorName: session?.name ?? "Moderator",
-        task: task?.title ?? "Task upload",
-        timestamp: new Date().toISOString(),
-        attachedFile: file.name,
-        message: "File uploaded.",
-      }),
-    }).catch(() => console.error("Submission failed"));
-    toast.success("File attached and submitted.");
   };
 
   const renderLanding = () => (
@@ -708,7 +793,24 @@ export default function Home() {
                         <p className="text-sm text-[var(--text-secondary)]">{task.detail}</p>
                         <button
                           type="button"
-                          onClick={() => markTaskComplete(task.id)}
+                          onClick={() => {
+                            const currentTask = tasks.find((item) => item.id === task.id);
+                            if (!currentTask) return;
+                            const nextTasks: Task[] = tasks.map((item) => (item.id === task.id ? { ...item, status: "completed" } : item));
+                            applyDashboardUpdate({ tasks: nextTasks });
+                            void fetch("/api/submit", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                moderatorName: session?.name ?? "Moderator",
+                                task: currentTask.title,
+                                timestamp: new Date().toISOString(),
+                                attachedFile: currentTask.fileName ?? "N/A",
+                                message: "Task completed.",
+                              }),
+                            }).catch(() => console.error("Submission failed"));
+                            toast.success("Task marked complete.");
+                          }}
                           className="text-xs uppercase tracking-widest text-[var(--accent)] hover:text-[var(--text)] transition mt-3 smooth-transition"
                         >
                           Complete →
@@ -841,7 +943,13 @@ export default function Home() {
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <a href={meeting.link} target="_blank" rel="noreferrer" className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">Join</a>
-                        <button type="button" onClick={() => handleCompleteMeeting(meeting.id)} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">Complete</button>
+                        <button type="button" onClick={() => {
+                          const nextMeetings = meetings.map((item) =>
+                            item.id === meeting.id ? { ...item, status: "completed" as const, link: "" } : item
+                          );
+                          applyDashboardUpdate({ meetings: nextMeetings });
+                          toast.success("Meeting completed and link discarded.");
+                        }} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">Complete</button>
                       </div>
                     </div>
                   </div>
@@ -892,7 +1000,10 @@ export default function Home() {
                   <div key={announcement.id} className="rounded-xl glass premium-border p-6 hover-lift">
                     <div className="flex items-start justify-between gap-4">
                       <p className="text-sm text-[var(--text)]">{announcement.message}</p>
-                      <button type="button" onClick={() => toggleAnnouncementPin(announcement.id)} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
+                      <button type="button" onClick={() => {
+                        const nextAnnouncements = announcements.map((item) => (item.id === announcement.id ? { ...item, pinned: !item.pinned } : item));
+                        applyDashboardUpdate({ announcements: nextAnnouncements });
+                      }} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
                         {announcement.pinned ? "Pinned" : "Pin"}
                       </button>
                     </div>
@@ -990,7 +1101,10 @@ export default function Home() {
 
                         <div className="flex flex-wrap items-center gap-2 md:gap-3">
                           <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
-                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -5)} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">−5</button>
+                            <button type="button" onClick={() => {
+                              const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points - 5 } : candidate)));
+                              applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                            }} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">−5</button>
                             <input
                               type="number"
                               value={item.points}
@@ -998,14 +1112,37 @@ export default function Home() {
                               disabled={leaderboardLocked}
                               className="w-20 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
                             />
-                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 5)} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">+5</button>
+                            <button type="button" onClick={() => {
+                              const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points + 5 } : candidate)));
+                              applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                            }} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">+5</button>
                           </div>
 
                           <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
-                            <button type="button" onClick={() => handleMoveParticipant(item.name, -1)} disabled={leaderboardLocked} className="rounded-full p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`Move ${item.name} up`}>
+                            <button type="button" onClick={() => {
+                              const items = [...leaderboard];
+                              const index = items.findIndex((candidate) => candidate.name === item.name);
+                              const targetIndex = index + -1;
+                              if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return;
+                              const source = items[index];
+                              const target = items[targetIndex];
+                              items[index] = { ...source, position: target.position };
+                              items[targetIndex] = { ...target, position: source.position };
+                              applyDashboardUpdate({ leaderboard: sortLeaderboard(items) });
+                            }} disabled={leaderboardLocked} className="rounded-full p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`Move ${item.name} up`}>
                               <ArrowUp className="h-4 w-4" />
                             </button>
-                            <button type="button" onClick={() => handleMoveParticipant(item.name, 1)} disabled={leaderboardLocked} className="rounded-full p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`Move ${item.name} down`}>
+                            <button type="button" onClick={() => {
+                              const items = [...leaderboard];
+                              const index = items.findIndex((candidate) => candidate.name === item.name);
+                              const targetIndex = index + 1;
+                              if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return;
+                              const source = items[index];
+                              const target = items[targetIndex];
+                              items[index] = { ...source, position: target.position };
+                              items[targetIndex] = { ...target, position: source.position };
+                              applyDashboardUpdate({ leaderboard: sortLeaderboard(items) });
+                            }} disabled={leaderboardLocked} className="rounded-full p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`Move ${item.name} down`}>
                               <ArrowDown className="h-4 w-4" />
                             </button>
                           </div>
@@ -1022,9 +1159,18 @@ export default function Home() {
                             />
                           </div>
 
-                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -1)} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">−1</button>
-                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 1)} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">+1</button>
-                          <button type="button" onClick={() => handleRemoveParticipant(item.name)} disabled={leaderboardLocked} className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition disabled:cursor-not-allowed disabled:opacity-60">
+                          <button type="button" onClick={() => {
+                            const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points - 1 } : candidate)));
+                            applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                          }} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">−1</button>
+                          <button type="button" onClick={() => {
+                            const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points + 1 } : candidate)));
+                            applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                          }} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">+1</button>
+                          <button type="button" onClick={() => {
+                            const nextLeaderboard = reindexLeaderboard(sortLeaderboard(leaderboard.filter((candidate) => candidate.name !== item.name)));
+                            applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                          }} disabled={leaderboardLocked} className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition disabled:cursor-not-allowed disabled:opacity-60">
                             Remove
                           </button>
                           {trend}
@@ -1064,6 +1210,9 @@ export default function Home() {
               <h1 className="text-lg font-light text-[var(--text)]">Command</h1>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4 min-w-0 relative z-20">
+              <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] ${syncStatus === "live" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-[var(--border)] bg-[var(--panel-hover)]/50 text-[var(--muted)]"}`}>
+                {syncStatus === "live" ? "Live sync" : "Local"}
+              </span>
               <button
                 type="button"
                 onClick={handleThemeToggle}

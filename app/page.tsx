@@ -735,7 +735,6 @@ export default function Home() {
                   return (
                     <div key={item.name} className={`flex items-center justify-between text-sm py-2 px-2 rounded transition ${isCurrentUser ? "bg-[var(--panel-hover)] text-[var(--accent)]" : ""}`}>
                       <span className="font-light text-[var(--text)]">{trend} #{item.position} {item.name}</span>
-                      <span className="text-[var(--text-secondary)]">{item.points} pts</span>
                     </div>
                   );
                 })}

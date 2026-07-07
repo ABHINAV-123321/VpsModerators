@@ -3,7 +3,7 @@
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import toast, { Toaster } from "react-hot-toast";
-import { ArrowRight, CalendarDays, ClipboardList, FileText, Flag, Moon, PieChart, Sun, Users, TrendingUp, TrendingDown } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, CalendarDays, ClipboardList, FileText, Flag, Lock, Moon, PieChart, Sun, TrendingDown, TrendingUp, Unlock, Users } from "lucide-react";
 
 type Role = "ops" | "moderator";
 type Session = { name: string; role: Role };
@@ -96,6 +96,10 @@ export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>(INITIAL_LEADERBOARD);
+  const [leaderboardLocked, setLeaderboardLocked] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("vps-ops-leaderboard-locked") === "true";
+  });
   const [newParticipantName, setNewParticipantName] = useState("");
   const [newParticipantPoints, setNewParticipantPoints] = useState("0");
 
@@ -213,6 +217,11 @@ export default function Home() {
     localStorage.setItem("vps-ops-leaderboard", JSON.stringify(leaderboard));
   }, [leaderboard, mounted]);
 
+  useEffect(() => {
+    if (!mounted) return;
+    localStorage.setItem("vps-ops-leaderboard-locked", String(leaderboardLocked));
+  }, [leaderboardLocked, mounted]);
+
   const pendingTasks = useMemo(() => tasks.filter((item) => item.status === "pending"), [tasks]);
   const completedTasks = useMemo(() => tasks.filter((item) => item.status === "completed"), [tasks]);
   const moderatorVisibleTasks = useMemo(
@@ -226,16 +235,26 @@ export default function Home() {
   }, [meetings]);
   const activeMeeting = useMemo(() => activeMeetings[0] ?? null, [activeMeetings]);
   const moderatorPosition = useMemo(() => leaderboard.find((item) => item.name === session?.name)?.position ?? null, [leaderboard, session]);
+  const visibleAnnouncements = useMemo(() => {
+    if (!session?.name) return [];
 
-  const normalizeLeaderboard = (items: LeaderboardItem[]) => {
-    const sorted = [...items]
-      .map((item) => ({ ...item, points: Number.isFinite(item.points) ? item.points : 0 }))
-      .sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+    return [...announcements]
+      .filter((item) => item.audience === "general" || item.recipient === session.name)
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [announcements, session]);
+  const sortedLeaderboard = useMemo(() => [...leaderboard].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name)), [leaderboard]);
 
-    return sorted.map((item, index) => ({ ...item, position: index + 1 }));
-  };
+  const sortLeaderboard = (items: LeaderboardItem[]) =>
+    [...items].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+
+  const reindexLeaderboard = (items: LeaderboardItem[]) => items.map((item, index) => ({ ...item, position: index + 1 }));
 
   const handleAddParticipant = () => {
+    if (leaderboardLocked) {
+      toast.error("The leaderboard is locked.");
+      return;
+    }
+
     const trimmedName = newParticipantName.trim();
     const parsedPoints = Number(newParticipantPoints);
 
@@ -249,30 +268,72 @@ export default function Home() {
       return;
     }
 
-    setLeaderboard((current) => normalizeLeaderboard([...current, { name: trimmedName, position: 0, points: parsedPoints, status: "New" }]));
+    setLeaderboard((current) => {
+      const nextPosition = current.length ? Math.max(...current.map((item) => item.position)) + 1 : 1;
+      return sortLeaderboard([...current, { name: trimmedName, position: nextPosition, points: parsedPoints, status: "New" }]);
+    });
     setNewParticipantName("");
     setNewParticipantPoints("0");
     toast.success("Participant added to leaderboard.");
   };
 
   const handleRemoveParticipant = (participantName: string) => {
-    setLeaderboard((current) => normalizeLeaderboard(current.filter((item) => item.name !== participantName)));
+    if (leaderboardLocked) {
+      toast.error("The leaderboard is locked.");
+      return;
+    }
+
+    setLeaderboard((current) => reindexLeaderboard(sortLeaderboard(current.filter((item) => item.name !== participantName))));
     toast.success("Participant removed from leaderboard.");
   };
 
   const handleAdjustParticipantPoints = (participantName: string, delta: number) => {
-    setLeaderboard((current) =>
-      normalizeLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: item.points + delta } : item)))
-    );
+    if (leaderboardLocked) {
+      toast.error("The leaderboard is locked.");
+      return;
+    }
+
+    setLeaderboard((current) => sortLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: item.points + delta } : item))));
   };
 
   const handleEditParticipantPoints = (participantName: string, value: string) => {
+    if (leaderboardLocked) return;
+
     const parsedPoints = Number(value);
     if (!Number.isFinite(parsedPoints)) return;
 
-    setLeaderboard((current) =>
-      normalizeLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: parsedPoints } : item)))
-    );
+    setLeaderboard((current) => sortLeaderboard(current.map((item) => (item.name === participantName ? { ...item, points: parsedPoints } : item))));
+  };
+
+  const handleEditParticipantPosition = (participantName: string, value: string) => {
+    if (leaderboardLocked) return;
+
+    const parsedPosition = Number(value);
+    if (!Number.isFinite(parsedPosition)) return;
+
+    setLeaderboard((current) => sortLeaderboard(current.map((item) => (item.name === participantName ? { ...item, position: parsedPosition } : item))));
+  };
+
+  const handleMoveParticipant = (participantName: string, direction: -1 | 1) => {
+    if (leaderboardLocked) {
+      toast.error("The leaderboard is locked.");
+      return;
+    }
+
+    setLeaderboard((current) => {
+      const items = [...current];
+      const index = items.findIndex((item) => item.name === participantName);
+      const targetIndex = index + direction;
+
+      if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return current;
+
+      const source = items[index];
+      const target = items[targetIndex];
+      items[index] = { ...source, position: target.position };
+      items[targetIndex] = { ...target, position: source.position };
+
+      return sortLeaderboard(items);
+    });
   };
 
   const handleThemeToggle = () => setTheme((current) => (current === "dark" ? "colorful" : "dark"));
@@ -668,16 +729,42 @@ export default function Home() {
             <div className="space-y-4">
               <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Competition</p>
               <div className="space-y-2">
-                {leaderboard.slice(0, 6).map((item) => {
+                {sortedLeaderboard.slice(0, 6).map((item) => {
                   const isCurrentUser = item.name === session?.name;
-                  const trend = item.position === 1 ? '↑' : item.position === 2 ? '→' : '↓';
+                  const trend = item.position === 1 ? "↑" : item.position === 2 ? "→" : "↓";
                   return (
-                    <div key={item.name} className={`flex items-center justify-between text-sm py-2 px-2 rounded transition ${isCurrentUser ? 'bg-[var(--panel-hover)] text-[var(--accent)]' : ''}`}>
+                    <div key={item.name} className={`flex items-center justify-between text-sm py-2 px-2 rounded transition ${isCurrentUser ? "bg-[var(--panel-hover)] text-[var(--accent)]" : ""}`}>
                       <span className="font-light text-[var(--text)]">{trend} #{item.position} {item.name}</span>
+                      <span className="text-[var(--text-secondary)]">{item.points} pts</span>
                     </div>
                   );
                 })}
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl glass premium-border p-8 hover-lift">
+            <div className="space-y-4">
+              <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Announcements</p>
+              {visibleAnnouncements.length ? (
+                <div className="space-y-3">
+                  {visibleAnnouncements.slice(0, 4).map((announcement) => (
+                    <div key={announcement.id} className="rounded-lg glass premium-border p-4 hover:bg-[var(--panel-hover)] smooth-transition">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm text-[var(--text)]">{announcement.message}</p>
+                          <p className="mt-1 text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                            {announcement.audience === "general" ? "Visible to all moderators" : `For ${announcement.recipient}`}
+                          </p>
+                        </div>
+                        {announcement.pinned && <span className="text-[10px] uppercase tracking-widest text-[var(--accent)]">Pinned</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-[var(--text-secondary)]">No relevant announcements yet.</p>
+              )}
             </div>
           </div>
         </motion.div>
@@ -839,12 +926,28 @@ export default function Home() {
           {activeSection === "leaderboard" && (
             <div className="rounded-xl glass premium-border p-8 hover-lift">
               <div className="space-y-6">
-                <div className="mb-4 pb-4 border-b border-[var(--border)]">
-                  <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Competition Standings</p>
-                  <p className="mt-2 text-sm text-[var(--text-secondary)]">OPS-only controls for participant management and score updates.</p>
+                <div className="flex flex-col gap-4 border-b border-[var(--border)] pb-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Competition Standings</p>
+                    <p className="mt-2 text-sm text-[var(--text-secondary)]">Manual ranking control for Operations, while moderators remain in read-only mode.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLeaderboardLocked((current) => !current)}
+                    className="inline-flex items-center gap-2 self-start rounded-full border border-[var(--border)] px-4 py-2 text-xs uppercase tracking-widest text-[var(--text)] glass-button glass-hover"
+                  >
+                    {leaderboardLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                    {leaderboardLocked ? "Unlock board" : "Lock board"}
+                  </button>
                 </div>
 
-                <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-hover)]/40 p-4 space-y-3">
+                <div className={`rounded-xl border border-[var(--border)] bg-[var(--panel-hover)]/40 p-4 space-y-3 ${leaderboardLocked ? "opacity-60" : ""}`}>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Manual controls</p>
+                    <span className={`text-xs uppercase tracking-widest ${leaderboardLocked ? "text-[var(--accent)]" : "text-emerald-400"}`}>
+                      {leaderboardLocked ? "Locked" : "Live"}
+                    </span>
+                  </div>
                   <div className="flex flex-col gap-3 md:flex-row md:items-end">
                     <div className="flex-1">
                       <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium mb-2">Participant</label>
@@ -853,7 +956,8 @@ export default function Home() {
                         value={newParticipantName}
                         onChange={(event) => setNewParticipantName(event.target.value)}
                         placeholder="Add participant"
-                        className="w-full glass-input px-4 py-3 rounded-lg text-sm"
+                        disabled={leaderboardLocked}
+                        className="w-full glass-input px-4 py-3 rounded-lg text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                     <div className="w-full md:w-32">
@@ -862,40 +966,66 @@ export default function Home() {
                         type="number"
                         value={newParticipantPoints}
                         onChange={(event) => setNewParticipantPoints(event.target.value)}
-                        className="w-full glass-input px-4 py-3 rounded-lg text-sm"
+                        disabled={leaderboardLocked}
+                        className="w-full glass-input px-4 py-3 rounded-lg text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
-                    <button type="button" onClick={handleAddParticipant} className="glass-button glass-hover px-4 py-3 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                    <button type="button" onClick={handleAddParticipant} disabled={leaderboardLocked} className="glass-button glass-hover px-4 py-3 rounded-full text-sm text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">
                       Add
                     </button>
                   </div>
                 </div>
 
                 <div className="space-y-3">
-                  {leaderboard.map((item, idx) => {
-                    const trend = idx === 0 ? <TrendingUp className="w-4 h-4 text-green-400" /> : idx === leaderboard.length - 1 ? <TrendingDown className="w-4 h-4 text-red-400" /> : <span className="text-[var(--text-secondary)]">→</span>;
+                  {sortedLeaderboard.map((item, idx) => {
+                    const trend = idx === 0 ? <TrendingUp className="w-4 h-4 text-green-400" /> : idx === sortedLeaderboard.length - 1 ? <TrendingDown className="w-4 h-4 text-red-400" /> : <span className="text-[var(--text-secondary)]">→</span>;
                     return (
                       <div key={item.name} className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--panel)]/50 p-4 md:flex-row md:items-center md:justify-between">
                         <div className="flex items-center gap-3 min-w-0">
                           <span className="text-xs font-bold text-[var(--accent)] w-6">#{item.position}</span>
-                          <span className="font-light text-[var(--text)] truncate">{item.name}</span>
+                          <div className="min-w-0">
+                            <span className="block font-light text-[var(--text)] truncate">{item.name}</span>
+                            <span className="text-[11px] uppercase tracking-wider text-[var(--muted)]">{item.status}</span>
+                          </div>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 md:gap-3">
                           <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
-                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -5)} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)]">−5</button>
+                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -5)} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">−5</button>
                             <input
                               type="number"
                               value={item.points}
                               onChange={(event) => handleEditParticipantPoints(item.name, event.target.value)}
-                              className="w-20 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none"
+                              disabled={leaderboardLocked}
+                              className="w-20 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
                             />
-                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 5)} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)]">+5</button>
+                            <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 5)} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">+5</button>
                           </div>
 
-                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -1)} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)]">−1</button>
-                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 1)} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)]">+1</button>
-                          <button type="button" onClick={() => handleRemoveParticipant(item.name)} className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
+                          <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
+                            <button type="button" onClick={() => handleMoveParticipant(item.name, -1)} disabled={leaderboardLocked} className="rounded-full p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`Move ${item.name} up`}>
+                              <ArrowUp className="h-4 w-4" />
+                            </button>
+                            <button type="button" onClick={() => handleMoveParticipant(item.name, 1)} disabled={leaderboardLocked} className="rounded-full p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`Move ${item.name} down`}>
+                              <ArrowDown className="h-4 w-4" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
+                            <span className="text-[11px] uppercase tracking-wider text-[var(--muted)]">Rank</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={item.position}
+                              onChange={(event) => handleEditParticipantPosition(item.name, event.target.value)}
+                              disabled={leaderboardLocked}
+                              className="w-12 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                            />
+                          </div>
+
+                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, -1)} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">−1</button>
+                          <button type="button" onClick={() => handleAdjustParticipantPoints(item.name, 1)} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">+1</button>
+                          <button type="button" onClick={() => handleRemoveParticipant(item.name)} disabled={leaderboardLocked} className="text-xs uppercase tracking-widest text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition disabled:cursor-not-allowed disabled:opacity-60">
                             Remove
                           </button>
                           {trend}

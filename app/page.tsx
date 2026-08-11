@@ -18,7 +18,7 @@ type TaskAssignmentMode = "specific" | "general";
 type AnnouncementAudienceMode = "specific" | "general";
 
 const OPS_PASSWORD = "HOO@07";
-const MODERATOR_NAMES = ["Harshul", "Harini", "Harshith", "Praneeth", "Sunidhi", "Stuti", "Herambh", "Siddharth"];
+const MODERATOR_NAMES = ["Harshul", "Harini", "Harshith", "Praneeth", "Sunidhi", "Stuti", "Herambh", "Siddharth", "Sriniketh"];
 const SECTIONS: { id: OpsSectionId; label: string; icon: typeof PieChart }[] = [
   { id: "overview", label: "Overview", icon: PieChart },
   { id: "meetings", label: "Meetings", icon: CalendarDays },
@@ -37,6 +37,7 @@ const INITIAL_LEADERBOARD: LeaderboardItem[] = [
   { name: "Stuti", position: 6, points: 278, status: "Stable" },
   { name: "Herambh", position: 7, points: 240, status: "Steady" },
   { name: "Siddharth", position: 8, points: 220, status: "Ready" },
+  { name: "Sriniketh", position: 9, points: 200, status: "Ready" },
 ];
 type DashboardState = {
   meetings: Meeting[];

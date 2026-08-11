@@ -1026,6 +1026,33 @@ export default function Home() {
               )}
             </div>
           </div>
+
+          <div className="rounded-2xl glass premium-border p-8 hover-lift">
+            <div className="space-y-4">
+              <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Forms</p>
+              {visibleGoogleForms.length ? (
+                <div className="space-y-3">
+                  {visibleGoogleForms.map((form) => (
+                    <div key={form.id} className="rounded-lg glass premium-border p-4 hover:bg-[var(--panel-hover)] smooth-transition">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm text-[var(--text)]">{form.link}</p>
+                          <p className="mt-1 text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                            {form.audience === "global" ? "Visible to all moderators" : `Visible to ${form.recipients.join(", ")}`}
+                          </p>
+                        </div>
+                      </div>
+                      <a href={form.link} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-xs uppercase tracking-widest text-[var(--accent)] hover:text-[var(--text)] transition smooth-transition">
+                        Open Form <ArrowRight className="w-4 h-4" />
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-[var(--text-secondary)]">No forms assigned to you.</p>
+              )}
+            </div>
+          </div>
         </motion.div>
       </div>
     </motion.section>

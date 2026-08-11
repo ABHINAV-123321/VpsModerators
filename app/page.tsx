@@ -123,6 +123,18 @@ const sanitizeMeetings = (value: unknown): Meeting[] => (Array.isArray(value) ? 
 const sanitizeTasks = (value: unknown): Task[] => (Array.isArray(value) ? value.map((item) => sanitizeTask(item as Partial<Task>)) : []);
 const sanitizeAnnouncements = (value: unknown): Announcement[] => (Array.isArray(value) ? value.map((item) => sanitizeAnnouncement(item as Partial<Announcement>)) : []);
 const sanitizeLeaderboard = (value: unknown): LeaderboardItem[] => (Array.isArray(value) ? value.map((item) => sanitizeLeaderboardItem(item as Partial<LeaderboardItem>)) : []);
+const sortLeaderboard = (items: LeaderboardItem[]) => [...items].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+const mergeLeaderboardWithDefaults = (items: LeaderboardItem[]) => {
+  const mergedItems = [...sanitizeLeaderboard(items)];
+  const existingNames = new Set(mergedItems.map((item) => item.name));
+  const missingItems = INITIAL_LEADERBOARD.filter((item) => !existingNames.has(item.name)).map((item) => ({ ...item }));
+
+  if (!missingItems.length) {
+    return sortLeaderboard(mergedItems);
+  }
+
+  return sortLeaderboard([...mergedItems, ...missingItems]);
+};
 const sanitizeDashboardState = (state: Partial<DashboardState>): DashboardState => ({
   meetings: sanitizeMeetings(state.meetings),
   tasks: sanitizeTasks(state.tasks),
@@ -265,7 +277,7 @@ export default function Home() {
       if (stored) {
         try {
           const parsed = JSON.parse(stored) as LeaderboardItem[];
-          if (Array.isArray(parsed)) setLeaderboard(sanitizeLeaderboard(parsed));
+          if (Array.isArray(parsed)) setLeaderboard(mergeLeaderboardWithDefaults(parsed));
         } catch {
           localStorage.removeItem("vps-ops-leaderboard");
         }
@@ -301,12 +313,13 @@ export default function Home() {
 
         const data = snapshot.data() as Partial<DashboardState>;
         const sanitizedState = sanitizeDashboardState(data);
+        const mergedLeaderboard = mergeLeaderboardWithDefaults(sanitizedState.leaderboard);
         setSyncStatus("live");
 
         setMeetings(sanitizedState.meetings);
         setTasks(sanitizedState.tasks);
         setAnnouncements(sanitizedState.announcements);
-        setLeaderboard(sanitizedState.leaderboard);
+        setLeaderboard(mergedLeaderboard);
         setLeaderboardLocked(sanitizedState.leaderboardLocked);
         setGoogleFormLink(sanitizedState.googleFormLink);
       },
@@ -362,6 +375,7 @@ export default function Home() {
   const pendingTasks = useMemo(() => tasks.filter((item) => item.status === "pending"), [tasks]);
   const completedTasks = useMemo(() => tasks.filter((item) => item.status === "completed"), [tasks]);
   const canManageOpsContent = session?.role === "ops";
+  const canViewLeaderboardScores = canManageOpsContent;
   const moderatorVisibleTasks = useMemo(
     () => tasks.filter((item) => item.status === "pending" && (item.assignedTo === "All Moderators" || item.assignedTo === session?.name)),
     [tasks, session?.name]
@@ -382,9 +396,6 @@ export default function Home() {
   }, [announcements, session]);
   const sortedLeaderboard = useMemo(() => [...leaderboard].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name)), [leaderboard]);
 
-  const sortLeaderboard = (items: LeaderboardItem[]) =>
-    [...items].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
-
   const reindexLeaderboard = (items: LeaderboardItem[]) => items.map((item, index) => ({ ...item, position: index + 1 }));
 
   const applyDashboardUpdate = (nextState: Partial<DashboardState>) => {
@@ -392,7 +403,7 @@ export default function Home() {
       meetings: nextState.meetings ?? meetings,
       tasks: nextState.tasks ?? tasks,
       announcements: nextState.announcements ?? announcements,
-      leaderboard: nextState.leaderboard ?? leaderboard,
+      leaderboard: mergeLeaderboardWithDefaults(nextState.leaderboard ?? leaderboard),
       leaderboardLocked: nextState.leaderboardLocked ?? leaderboardLocked,
       googleFormLink: nextState.googleFormLink ?? googleFormLink,
       updatedAt: new Date().toISOString(),
@@ -875,9 +886,9 @@ export default function Home() {
         <motion.div variants={itemVariants} className="space-y-6">
           <div className="rounded-2xl glass premium-border p-8 hover-lift">
             <div className="space-y-4">
-              <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Competition</p>
+              <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Leaderboard</p>
               <div className="space-y-2">
-                {sortedLeaderboard.slice(0, 6).map((item) => {
+                {sortedLeaderboard.map((item) => {
                   const isCurrentUser = item.name === session?.name;
                   const trend = item.position === 1 ? "↑" : item.position === 2 ? "→" : "↓";
                   return (
@@ -1156,23 +1167,29 @@ export default function Home() {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 md:gap-3">
-                          <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
-                            <button type="button" onClick={() => {
-                              const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points - 5 } : candidate)));
-                              applyDashboardUpdate({ leaderboard: nextLeaderboard });
-                            }} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">−5</button>
-                            <input
-                              type="number"
-                              value={item.points}
-                              onChange={(event) => handleEditParticipantPoints(item.name, event.target.value)}
-                              disabled={leaderboardLocked}
-                              className="w-20 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                            />
-                            <button type="button" onClick={() => {
-                              const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points + 5 } : candidate)));
-                              applyDashboardUpdate({ leaderboard: nextLeaderboard });
-                            }} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">+5</button>
-                          </div>
+                          {canViewLeaderboardScores ? (
+                            <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
+                              <button type="button" onClick={() => {
+                                const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points - 5 } : candidate)));
+                                applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                              }} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">−5</button>
+                              <input
+                                type="number"
+                                value={item.points}
+                                onChange={(event) => handleEditParticipantPoints(item.name, event.target.value)}
+                                disabled={leaderboardLocked}
+                                className="w-20 bg-transparent text-center text-sm font-light text-[var(--text)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                              <button type="button" onClick={() => {
+                                const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points + 5 } : candidate)));
+                                applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                              }} disabled={leaderboardLocked} className="px-2 py-1 text-sm text-[var(--muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60">+5</button>
+                            </div>
+                          ) : (
+                            <div className="rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-3 py-1 text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                              Scores hidden
+                            </div>
+                          )}
 
                           <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-2 py-1">
                             <button type="button" onClick={() => {
@@ -1215,14 +1232,18 @@ export default function Home() {
                             />
                           </div>
 
-                          <button type="button" onClick={() => {
-                            const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points - 1 } : candidate)));
-                            applyDashboardUpdate({ leaderboard: nextLeaderboard });
-                          }} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">−1</button>
-                          <button type="button" onClick={() => {
-                            const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points + 1 } : candidate)));
-                            applyDashboardUpdate({ leaderboard: nextLeaderboard });
-                          }} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">+1</button>
+                          {canViewLeaderboardScores && (
+                            <>
+                              <button type="button" onClick={() => {
+                                const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points - 1 } : candidate)));
+                                applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                              }} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">−1</button>
+                              <button type="button" onClick={() => {
+                                const nextLeaderboard = sortLeaderboard(leaderboard.map((candidate) => (candidate.name === item.name ? { ...candidate, points: candidate.points + 1 } : candidate)));
+                                applyDashboardUpdate({ leaderboard: nextLeaderboard });
+                              }} disabled={leaderboardLocked} className="glass-button glass-hover px-3 py-2 rounded-full text-xs text-[var(--text)] border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60">+1</button>
+                            </>
+                          )}
                           <button type="button" onClick={() => {
                             const nextLeaderboard = reindexLeaderboard(sortLeaderboard(leaderboard.filter((candidate) => candidate.name !== item.name)));
                             applyDashboardUpdate({ leaderboard: nextLeaderboard });

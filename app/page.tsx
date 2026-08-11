@@ -17,6 +17,7 @@ type OpsSectionId = "overview" | "meetings" | "tasks" | "forms" | "leaderboard" 
 type TaskAssignmentMode = "specific" | "general";
 type AnnouncementAudienceMode = "specific" | "general";
 type GoogleFormAudienceMode = "global" | "specific";
+type GoogleFormItem = { id: string; link: string; audience: GoogleFormAudienceMode; recipients: string[] };
 type GoogleFormState = { link: string; audience: GoogleFormAudienceMode; recipients: string[] };
 
 const OPS_PASSWORD = "HOO@07";
@@ -47,9 +48,7 @@ type DashboardState = {
   announcements: Announcement[];
   leaderboard: LeaderboardItem[];
   leaderboardLocked: boolean;
-  googleFormLink: string;
-  googleFormAudience: GoogleFormAudienceMode;
-  googleFormRecipients: string[];
+  googleForms: GoogleFormItem[];
   updatedAt: string;
   updatedBy: string;
 };
@@ -130,6 +129,28 @@ const sanitizeAnnouncements = (value: unknown): Announcement[] => (Array.isArray
 const sanitizeLeaderboard = (value: unknown): LeaderboardItem[] => (Array.isArray(value) ? value.map((item) => sanitizeLeaderboardItem(item as Partial<LeaderboardItem>)) : []);
 const sanitizeGoogleFormAudience = (value: unknown): GoogleFormAudienceMode => (value === "specific" ? "specific" : "global");
 const sanitizeGoogleFormRecipients = (value: unknown): string[] => (Array.isArray(value) ? value.map((item) => normalizeText(item)).filter(Boolean) : []);
+const sanitizeGoogleFormItem = (item: Partial<GoogleFormItem> | null | undefined): GoogleFormItem => ({
+  id: normalizeText(item?.id, createId()),
+  link: normalizeText(item?.link),
+  audience: sanitizeGoogleFormAudience(item?.audience),
+  recipients: sanitizeGoogleFormRecipients(item?.recipients),
+});
+const sanitizeGoogleForms = (value: unknown): GoogleFormItem[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeGoogleFormItem(item as Partial<GoogleFormItem>));
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as { link?: unknown; audience?: unknown; recipients?: unknown; googleFormLink?: unknown; googleFormAudience?: unknown; googleFormRecipients?: unknown };
+    const link = normalizeText(record.googleFormLink ?? record.link);
+    if (!link) {
+      return [];
+    }
+    return [sanitizeGoogleFormItem({ id: createId(), link, audience: sanitizeGoogleFormAudience(record.googleFormAudience ?? record.audience), recipients: sanitizeGoogleFormRecipients(record.googleFormRecipients ?? record.recipients) })];
+  }
+
+  return [];
+};
 const sanitizeGoogleFormState = (value: unknown): GoogleFormState => {
   if (typeof value === "string") {
     return { link: normalizeText(value), audience: "global", recipients: [] };
@@ -166,30 +187,24 @@ const mergeLeaderboardWithDefaults = (items: LeaderboardItem[]) => {
 
   return sortLeaderboard([...mergedItems, ...missingItems]);
 };
-const sanitizeDashboardState = (state: Partial<DashboardState>): DashboardState => {
-  const formState = sanitizeGoogleFormState(state);
-
-  return {
-    meetings: sanitizeMeetings(state.meetings),
-    tasks: sanitizeTasks(state.tasks),
-    announcements: sanitizeAnnouncements(state.announcements),
-    leaderboard: sanitizeLeaderboard(state.leaderboard),
-    leaderboardLocked: Boolean(state.leaderboardLocked),
-    googleFormLink: formState.link,
-    googleFormAudience: formState.audience,
-    googleFormRecipients: formState.recipients,
-    updatedAt: normalizeText(state.updatedAt, new Date().toISOString()),
-    updatedBy: normalizeText(state.updatedBy, "OPS"),
-  };
-};
+const sanitizeDashboardState = (state: Partial<DashboardState>): DashboardState => ({
+  meetings: sanitizeMeetings(state.meetings),
+  tasks: sanitizeTasks(state.tasks),
+  announcements: sanitizeAnnouncements(state.announcements),
+  leaderboard: sanitizeLeaderboard(state.leaderboard),
+  leaderboardLocked: Boolean(state.leaderboardLocked),
+  googleForms: sanitizeGoogleForms(state.googleForms ?? state),
+  updatedAt: normalizeText(state.updatedAt, new Date().toISOString()),
+  updatedBy: normalizeText(state.updatedBy, "OPS"),
+});
 const isMeetingActive = (meeting: Meeting) => meeting.status !== "completed";
-const readStoredGoogleFormState = (): GoogleFormState => {
+const readStoredGoogleFormState = (): GoogleFormItem[] => {
   if (typeof window === "undefined") {
-    return { link: "", audience: "global", recipients: [] };
+    return [];
   }
 
   const stored = window.localStorage.getItem("vps-ops-google-form");
-  return sanitizeGoogleFormState(stored);
+  return sanitizeGoogleForms(stored);
 };
 const containerVariants: Variants = { 
   hidden: { opacity: 0 }, 
@@ -236,9 +251,10 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [opsName, setOpsName] = useState("");
   const [opsPassword, setOpsPassword] = useState("");
-  const [googleFormLink, setGoogleFormLink] = useState(() => readStoredGoogleFormState().link);
-  const [formAudienceMode, setFormAudienceMode] = useState<GoogleFormAudienceMode>(() => readStoredGoogleFormState().audience);
-  const [formRecipients, setFormRecipients] = useState<string[]>(() => readStoredGoogleFormState().recipients);
+  const [googleForms, setGoogleForms] = useState<GoogleFormItem[]>(() => readStoredGoogleFormState());
+  const [googleFormLink, setGoogleFormLink] = useState("");
+  const [formAudienceMode, setFormAudienceMode] = useState<GoogleFormAudienceMode>("global");
+  const [formRecipients, setFormRecipients] = useState<string[]>([]);
   const [meetingDraft, setMeetingDraft] = useState<Partial<Meeting>>({ title: "", datetime: "", agenda: "", link: "" });
   const [taskDraft, setTaskDraft] = useState<Partial<Task>>({ title: "", type: "question", detail: "", due: "", assignedTo: MODERATOR_NAMES[0] });
   const [taskAssignmentMode, setTaskAssignmentMode] = useState<TaskAssignmentMode>("specific");
@@ -330,9 +346,10 @@ export default function Home() {
 
     const restoreGoogleForm = () => {
       const parsed = readStoredGoogleFormState();
-      setGoogleFormLink(parsed.link);
-      setFormAudienceMode(parsed.audience);
-      setFormRecipients(parsed.recipients);
+      setGoogleForms(parsed);
+      setGoogleFormLink("");
+      setFormAudienceMode("global");
+      setFormRecipients([]);
     };
 
     restoreSession();
@@ -373,9 +390,10 @@ export default function Home() {
         setAnnouncements(sanitizedState.announcements);
         setLeaderboard(mergedLeaderboard);
         setLeaderboardLocked(sanitizedState.leaderboardLocked);
-        setGoogleFormLink(sanitizedState.googleFormLink);
-        setFormAudienceMode(sanitizedState.googleFormAudience);
-        setFormRecipients(sanitizedState.googleFormRecipients);
+        setGoogleForms(sanitizedState.googleForms);
+        setGoogleFormLink("");
+        setFormAudienceMode("global");
+        setFormRecipients([]);
       },
       () => {
         setSyncStatus("local");
@@ -413,8 +431,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!mounted) return;
-    localStorage.setItem("vps-ops-google-form", JSON.stringify({ link: googleFormLink, audience: formAudienceMode, recipients: formRecipients }));
-  }, [googleFormLink, formAudienceMode, formRecipients, mounted]);
+    localStorage.setItem("vps-ops-google-form", JSON.stringify(googleForms));
+  }, [googleForms, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -430,25 +448,21 @@ export default function Home() {
   const completedTasks = useMemo(() => tasks.filter((item) => item.status === "completed"), [tasks]);
   const canManageOpsContent = session?.role === "ops";
   const canViewLeaderboardScores = canManageOpsContent;
-  const visibleGoogleForm = useMemo(() => {
-    if (!googleFormLink) {
-      return null;
+  const visibleGoogleForms = useMemo(() => {
+    if (!googleForms.length) {
+      return [];
     }
 
-    if (canManageOpsContent) {
-      return { link: googleFormLink, audience: formAudienceMode, recipients: formRecipients };
-    }
-
-    if (formAudienceMode === "global") {
-      return { link: googleFormLink, audience: "global" as GoogleFormAudienceMode, recipients: [] };
-    }
-
-    if (session?.name && formRecipients.includes(session.name)) {
-      return { link: googleFormLink, audience: "specific" as GoogleFormAudienceMode, recipients: formRecipients };
-    }
-
-    return null;
-  }, [canManageOpsContent, formAudienceMode, formRecipients, googleFormLink, session?.name]);
+    return googleForms.filter((form) => {
+      if (canManageOpsContent) {
+        return true;
+      }
+      if (form.audience === "global") {
+        return true;
+      }
+      return Boolean(session?.name && form.recipients.includes(session.name));
+    });
+  }, [canManageOpsContent, googleForms, session?.name]);
   const moderatorVisibleTasks = useMemo(
     () => tasks.filter((item) => item.status === "pending" && (item.assignedTo === "All Moderators" || item.assignedTo === session?.name)),
     [tasks, session?.name]
@@ -478,9 +492,7 @@ export default function Home() {
       announcements: nextState.announcements ?? announcements,
       leaderboard: mergeLeaderboardWithDefaults(nextState.leaderboard ?? leaderboard),
       leaderboardLocked: nextState.leaderboardLocked ?? leaderboardLocked,
-      googleFormLink: nextState.googleFormLink ?? googleFormLink,
-      googleFormAudience: nextState.googleFormAudience ?? formAudienceMode,
-      googleFormRecipients: nextState.googleFormRecipients ?? formRecipients,
+      googleForms: nextState.googleForms ?? googleForms,
       updatedAt: new Date().toISOString(),
       updatedBy: session?.name ?? "OPS",
     });
@@ -490,7 +502,7 @@ export default function Home() {
     setAnnouncements(updatedState.announcements);
     setLeaderboard(updatedState.leaderboard);
     setLeaderboardLocked(updatedState.leaderboardLocked);
-    setGoogleFormLink(updatedState.googleFormLink);
+    setGoogleForms(updatedState.googleForms);
 
     if (typeof window !== "undefined") {
       const firebaseConfig = getFirebaseConfig();
@@ -746,20 +758,28 @@ export default function Home() {
       toast.error("Select at least one moderator.");
       return;
     }
-    applyDashboardUpdate({ googleFormLink: googleFormLink.trim(), googleFormAudience: formAudienceMode, googleFormRecipients: formRecipients });
+
+    const nextForm: GoogleFormItem = {
+      id: createId(),
+      link: googleFormLink.trim(),
+      audience: formAudienceMode,
+      recipients: formRecipients,
+    };
+
+    applyDashboardUpdate({ googleForms: [nextForm, ...googleForms] });
+    setGoogleFormLink("");
+    setFormAudienceMode("global");
+    setFormRecipients([]);
     setOpenFormModal(false);
     toast.success(formAudienceMode === "specific" ? "Form shared with selected moderators." : "Global form link saved.");
   };
 
-  const handleRemoveGoogleForm = () => {
+  const handleRemoveGoogleForm = (formId: string) => {
     if (!canManageOpsContent) {
       toast.error("Only OPS can remove forms.");
       return;
     }
-    applyDashboardUpdate({ googleFormLink: "", googleFormAudience: "global", googleFormRecipients: [] });
-    setFormAudienceMode("global");
-    setFormRecipients([]);
-    setOpenFormModal(false);
+    applyDashboardUpdate({ googleForms: googleForms.filter((item) => item.id !== formId) });
     toast.success("Form link removed.");
   };
 
@@ -1162,23 +1182,27 @@ export default function Home() {
             <div className="rounded-xl glass premium-border p-8 hover-lift">
               <div className="space-y-4">
                 <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">External Form</p>
-                {visibleGoogleForm ? (
-                  <>
-                    <p className="text-sm text-[var(--text-secondary)] truncate">{visibleGoogleForm.link}</p>
-                    <p className="text-[11px] uppercase tracking-wider text-[var(--muted)]">
-                      {visibleGoogleForm.audience === "global" ? "Visible to all moderators" : `Visible to ${visibleGoogleForm.recipients.join(", ")}`}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <a href={visibleGoogleForm.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
-                        Open <ArrowRight className="w-4 h-4" />
-                      </a>
-                      {canManageOpsContent && (
-                        <button type="button" onClick={handleRemoveGoogleForm} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                  </>
+                {visibleGoogleForms.length ? (
+                  <div className="space-y-4">
+                    {visibleGoogleForms.map((form) => (
+                      <div key={form.id} className="rounded-lg border border-[var(--border)] bg-[var(--panel-hover)]/40 p-4 space-y-3">
+                        <p className="text-sm text-[var(--text-secondary)] truncate">{form.link}</p>
+                        <p className="text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                          {form.audience === "global" ? "Visible to all moderators" : `Visible to ${form.recipients.join(", ")}`}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <a href={form.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                            Open <ArrowRight className="w-4 h-4" />
+                          </a>
+                          {canManageOpsContent && (
+                            <button type="button" onClick={() => handleRemoveGoogleForm(form.id)} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <p className="text-sm text-[var(--text-secondary)]">Not configured.</p>
                 )}

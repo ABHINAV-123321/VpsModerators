@@ -18,7 +18,7 @@ type TaskAssignmentMode = "specific" | "general";
 type AnnouncementAudienceMode = "specific" | "general";
 
 const OPS_PASSWORD = "HOO@07";
-const MODERATOR_NAMES = ["Harshul", "Harini", "Harshith", "Praneeth", "Sunidhi", "Utkarsh"];
+const MODERATOR_NAMES = ["Harshul", "Harini", "Harshith", "Praneeth", "Sunidhi", "Stuti", "Herambh", "Siddharth"];
 const SECTIONS: { id: OpsSectionId; label: string; icon: typeof PieChart }[] = [
   { id: "overview", label: "Overview", icon: PieChart },
   { id: "meetings", label: "Meetings", icon: CalendarDays },
@@ -34,7 +34,9 @@ const INITIAL_LEADERBOARD: LeaderboardItem[] = [
   { name: "Harshith", position: 3, points: 356, status: "On track" },
   { name: "Praneeth", position: 4, points: 328, status: "Ready" },
   { name: "Sunidhi", position: 5, points: 301, status: "Alert" },
-  { name: "Utkarsh", position: 6, points: 278, status: "Stable" },
+  { name: "Stuti", position: 6, points: 278, status: "Stable" },
+  { name: "Herambh", position: 7, points: 240, status: "Steady" },
+  { name: "Siddharth", position: 8, points: 220, status: "Ready" },
 ];
 type DashboardState = {
   meetings: Meeting[];
@@ -659,6 +661,16 @@ export default function Home() {
     toast.success("Form link saved.");
   };
 
+  const handleRemoveGoogleForm = () => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can remove forms.");
+      return;
+    }
+    applyDashboardUpdate({ googleFormLink: "" });
+    setOpenFormModal(false);
+    toast.success("Form link removed.");
+  };
+
   const handlePublishAnnouncement = () => {
     if (!canManageOpsContent) {
       toast.error("Only OPS can post announcements.");
@@ -690,6 +702,17 @@ export default function Home() {
     setAnnouncementRecipient(MODERATOR_NAMES[0]);
     setOpenAnnouncementModal(false);
     toast.success(audience === "specific" ? "Announcement sent to moderator." : "General announcement posted.");
+  };
+
+  const handleDeleteAnnouncement = (announcementId: string) => {
+    if (!canManageOpsContent) {
+      toast.error("Only OPS can manage announcements.");
+      return;
+    }
+
+    const nextAnnouncements = announcements.filter((item) => item.id !== announcementId);
+    applyDashboardUpdate({ announcements: nextAnnouncements });
+    toast.success("Announcement removed.");
   };
 
   const renderLanding = () => (
@@ -1023,12 +1046,17 @@ export default function Home() {
                   <div key={announcement.id} className="rounded-xl glass premium-border p-6 hover-lift">
                     <div className="flex items-start justify-between gap-4">
                       <p className="text-sm text-[var(--text)]">{announcement.message}</p>
-                      <button type="button" onClick={() => {
-                        const nextAnnouncements = announcements.map((item) => (item.id === announcement.id ? { ...item, pinned: !item.pinned } : item));
-                        applyDashboardUpdate({ announcements: nextAnnouncements });
-                      }} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
-                        {announcement.pinned ? "Pinned" : "Pin"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => {
+                          const nextAnnouncements = announcements.map((item) => (item.id === announcement.id ? { ...item, pinned: !item.pinned } : item));
+                          applyDashboardUpdate({ announcements: nextAnnouncements });
+                        }} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
+                          {announcement.pinned ? "Pinned" : "Pin"}
+                        </button>
+                        <button type="button" onClick={() => handleDeleteAnnouncement(announcement.id)} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition smooth-transition">
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -1045,9 +1073,14 @@ export default function Home() {
                 {googleFormLink ? (
                   <>
                     <p className="text-sm text-[var(--text-secondary)] truncate">{googleFormLink}</p>
-                    <a href={googleFormLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
-                      Open <ArrowRight className="w-4 h-4" />
-                    </a>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <a href={googleFormLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                        Open <ArrowRight className="w-4 h-4" />
+                      </a>
+                      <button type="button" onClick={handleRemoveGoogleForm} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                        Remove
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <p className="text-sm text-[var(--text-secondary)]">Not configured.</p>

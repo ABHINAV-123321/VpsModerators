@@ -16,6 +16,8 @@ type LeaderboardItem = { name: string; position: number; points: number; status:
 type OpsSectionId = "overview" | "meetings" | "tasks" | "forms" | "leaderboard" | "announcements" | "settings";
 type TaskAssignmentMode = "specific" | "general";
 type AnnouncementAudienceMode = "specific" | "general";
+type GoogleFormAudienceMode = "global" | "specific";
+type GoogleFormState = { link: string; audience: GoogleFormAudienceMode; recipients: string[] };
 
 const OPS_PASSWORD = "HOO@07";
 const MODERATOR_NAMES = ["Harshul", "Harini", "Harshith", "Praneeth", "Sunidhi", "Stuti", "Herambh", "Siddharth", "Sriniketh"];
@@ -46,6 +48,8 @@ type DashboardState = {
   leaderboard: LeaderboardItem[];
   leaderboardLocked: boolean;
   googleFormLink: string;
+  googleFormAudience: GoogleFormAudienceMode;
+  googleFormRecipients: string[];
   updatedAt: string;
   updatedBy: string;
 };
@@ -124,6 +128,32 @@ const sanitizeMeetings = (value: unknown): Meeting[] => (Array.isArray(value) ? 
 const sanitizeTasks = (value: unknown): Task[] => (Array.isArray(value) ? value.map((item) => sanitizeTask(item as Partial<Task>)) : []);
 const sanitizeAnnouncements = (value: unknown): Announcement[] => (Array.isArray(value) ? value.map((item) => sanitizeAnnouncement(item as Partial<Announcement>)) : []);
 const sanitizeLeaderboard = (value: unknown): LeaderboardItem[] => (Array.isArray(value) ? value.map((item) => sanitizeLeaderboardItem(item as Partial<LeaderboardItem>)) : []);
+const sanitizeGoogleFormAudience = (value: unknown): GoogleFormAudienceMode => (value === "specific" ? "specific" : "global");
+const sanitizeGoogleFormRecipients = (value: unknown): string[] => (Array.isArray(value) ? value.map((item) => normalizeText(item)).filter(Boolean) : []);
+const sanitizeGoogleFormState = (value: unknown): GoogleFormState => {
+  if (typeof value === "string") {
+    return { link: normalizeText(value), audience: "global", recipients: [] };
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Partial<DashboardState> & {
+      link?: unknown;
+      audience?: unknown;
+      recipients?: unknown;
+      googleFormLink?: unknown;
+      googleFormAudience?: unknown;
+      googleFormRecipients?: unknown;
+    };
+
+    return {
+      link: normalizeText(record.googleFormLink ?? record.link),
+      audience: sanitizeGoogleFormAudience(record.googleFormAudience ?? record.audience),
+      recipients: sanitizeGoogleFormRecipients(record.googleFormRecipients ?? record.recipients),
+    };
+  }
+
+  return { link: "", audience: "global", recipients: [] };
+};
 const sortLeaderboard = (items: LeaderboardItem[]) => [...items].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
 const mergeLeaderboardWithDefaults = (items: LeaderboardItem[]) => {
   const mergedItems = [...sanitizeLeaderboard(items)];
@@ -136,17 +166,31 @@ const mergeLeaderboardWithDefaults = (items: LeaderboardItem[]) => {
 
   return sortLeaderboard([...mergedItems, ...missingItems]);
 };
-const sanitizeDashboardState = (state: Partial<DashboardState>): DashboardState => ({
-  meetings: sanitizeMeetings(state.meetings),
-  tasks: sanitizeTasks(state.tasks),
-  announcements: sanitizeAnnouncements(state.announcements),
-  leaderboard: sanitizeLeaderboard(state.leaderboard),
-  leaderboardLocked: Boolean(state.leaderboardLocked),
-  googleFormLink: normalizeText(state.googleFormLink),
-  updatedAt: normalizeText(state.updatedAt, new Date().toISOString()),
-  updatedBy: normalizeText(state.updatedBy, "OPS"),
-});
+const sanitizeDashboardState = (state: Partial<DashboardState>): DashboardState => {
+  const formState = sanitizeGoogleFormState(state);
+
+  return {
+    meetings: sanitizeMeetings(state.meetings),
+    tasks: sanitizeTasks(state.tasks),
+    announcements: sanitizeAnnouncements(state.announcements),
+    leaderboard: sanitizeLeaderboard(state.leaderboard),
+    leaderboardLocked: Boolean(state.leaderboardLocked),
+    googleFormLink: formState.link,
+    googleFormAudience: formState.audience,
+    googleFormRecipients: formState.recipients,
+    updatedAt: normalizeText(state.updatedAt, new Date().toISOString()),
+    updatedBy: normalizeText(state.updatedBy, "OPS"),
+  };
+};
 const isMeetingActive = (meeting: Meeting) => meeting.status !== "completed";
+const readStoredGoogleFormState = (): GoogleFormState => {
+  if (typeof window === "undefined") {
+    return { link: "", audience: "global", recipients: [] };
+  }
+
+  const stored = window.localStorage.getItem("vps-ops-google-form");
+  return sanitizeGoogleFormState(stored);
+};
 const containerVariants: Variants = { 
   hidden: { opacity: 0 }, 
   visible: { 
@@ -192,10 +236,9 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [opsName, setOpsName] = useState("");
   const [opsPassword, setOpsPassword] = useState("");
-  const [googleFormLink, setGoogleFormLink] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem("vps-ops-google-form") ?? "";
-  });
+  const [googleFormLink, setGoogleFormLink] = useState(() => readStoredGoogleFormState().link);
+  const [formAudienceMode, setFormAudienceMode] = useState<GoogleFormAudienceMode>(() => readStoredGoogleFormState().audience);
+  const [formRecipients, setFormRecipients] = useState<string[]>(() => readStoredGoogleFormState().recipients);
   const [meetingDraft, setMeetingDraft] = useState<Partial<Meeting>>({ title: "", datetime: "", agenda: "", link: "" });
   const [taskDraft, setTaskDraft] = useState<Partial<Task>>({ title: "", type: "question", detail: "", due: "", assignedTo: MODERATOR_NAMES[0] });
   const [taskAssignmentMode, setTaskAssignmentMode] = useState<TaskAssignmentMode>("specific");
@@ -285,12 +328,20 @@ export default function Home() {
       }
     };
 
+    const restoreGoogleForm = () => {
+      const parsed = readStoredGoogleFormState();
+      setGoogleFormLink(parsed.link);
+      setFormAudienceMode(parsed.audience);
+      setFormRecipients(parsed.recipients);
+    };
+
     restoreSession();
     restoreMeetings();
     restoreTasks();
     restoreAnnouncements();
 
     restoreLeaderboard();
+    restoreGoogleForm();
   }, []);
 
   useEffect(() => {
@@ -323,6 +374,8 @@ export default function Home() {
         setLeaderboard(mergedLeaderboard);
         setLeaderboardLocked(sanitizedState.leaderboardLocked);
         setGoogleFormLink(sanitizedState.googleFormLink);
+        setFormAudienceMode(sanitizedState.googleFormAudience);
+        setFormRecipients(sanitizedState.googleFormRecipients);
       },
       () => {
         setSyncStatus("local");
@@ -360,8 +413,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!mounted) return;
-    localStorage.setItem("vps-ops-google-form", googleFormLink);
-  }, [googleFormLink, mounted]);
+    localStorage.setItem("vps-ops-google-form", JSON.stringify({ link: googleFormLink, audience: formAudienceMode, recipients: formRecipients }));
+  }, [googleFormLink, formAudienceMode, formRecipients, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -377,6 +430,25 @@ export default function Home() {
   const completedTasks = useMemo(() => tasks.filter((item) => item.status === "completed"), [tasks]);
   const canManageOpsContent = session?.role === "ops";
   const canViewLeaderboardScores = canManageOpsContent;
+  const visibleGoogleForm = useMemo(() => {
+    if (!googleFormLink) {
+      return null;
+    }
+
+    if (canManageOpsContent) {
+      return { link: googleFormLink, audience: formAudienceMode, recipients: formRecipients };
+    }
+
+    if (formAudienceMode === "global") {
+      return { link: googleFormLink, audience: "global" as GoogleFormAudienceMode, recipients: [] };
+    }
+
+    if (session?.name && formRecipients.includes(session.name)) {
+      return { link: googleFormLink, audience: "specific" as GoogleFormAudienceMode, recipients: formRecipients };
+    }
+
+    return null;
+  }, [canManageOpsContent, formAudienceMode, formRecipients, googleFormLink, session?.name]);
   const moderatorVisibleTasks = useMemo(
     () => tasks.filter((item) => item.status === "pending" && (item.assignedTo === "All Moderators" || item.assignedTo === session?.name)),
     [tasks, session?.name]
@@ -407,6 +479,8 @@ export default function Home() {
       leaderboard: mergeLeaderboardWithDefaults(nextState.leaderboard ?? leaderboard),
       leaderboardLocked: nextState.leaderboardLocked ?? leaderboardLocked,
       googleFormLink: nextState.googleFormLink ?? googleFormLink,
+      googleFormAudience: nextState.googleFormAudience ?? formAudienceMode,
+      googleFormRecipients: nextState.googleFormRecipients ?? formRecipients,
       updatedAt: new Date().toISOString(),
       updatedBy: session?.name ?? "OPS",
     });
@@ -668,9 +742,13 @@ export default function Home() {
       toast.error("Enter a valid form URL.");
       return;
     }
-    applyDashboardUpdate({ googleFormLink: googleFormLink.trim() });
+    if (formAudienceMode === "specific" && formRecipients.length === 0) {
+      toast.error("Select at least one moderator.");
+      return;
+    }
+    applyDashboardUpdate({ googleFormLink: googleFormLink.trim(), googleFormAudience: formAudienceMode, googleFormRecipients: formRecipients });
     setOpenFormModal(false);
-    toast.success("Form link saved.");
+    toast.success(formAudienceMode === "specific" ? "Form shared with selected moderators." : "Global form link saved.");
   };
 
   const handleRemoveGoogleForm = () => {
@@ -678,7 +756,9 @@ export default function Home() {
       toast.error("Only OPS can remove forms.");
       return;
     }
-    applyDashboardUpdate({ googleFormLink: "" });
+    applyDashboardUpdate({ googleFormLink: "", googleFormAudience: "global", googleFormRecipients: [] });
+    setFormAudienceMode("global");
+    setFormRecipients([]);
     setOpenFormModal(false);
     toast.success("Form link removed.");
   };
@@ -1082,16 +1162,21 @@ export default function Home() {
             <div className="rounded-xl glass premium-border p-8 hover-lift">
               <div className="space-y-4">
                 <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">External Form</p>
-                {googleFormLink ? (
+                {visibleGoogleForm ? (
                   <>
-                    <p className="text-sm text-[var(--text-secondary)] truncate">{googleFormLink}</p>
+                    <p className="text-sm text-[var(--text-secondary)] truncate">{visibleGoogleForm.link}</p>
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                      {visibleGoogleForm.audience === "global" ? "Visible to all moderators" : `Visible to ${visibleGoogleForm.recipients.join(", ")}`}
+                    </p>
                     <div className="flex flex-wrap items-center gap-2">
-                      <a href={googleFormLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                      <a href={visibleGoogleForm.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
                         Open <ArrowRight className="w-4 h-4" />
                       </a>
-                      <button type="button" onClick={handleRemoveGoogleForm} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
-                        Remove
-                      </button>
+                      {canManageOpsContent && (
+                        <button type="button" onClick={handleRemoveGoogleForm} className="glass-button glass-hover px-4 py-2 rounded-full text-sm text-[var(--text)] border border-[var(--border)]">
+                          Remove
+                        </button>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -1548,6 +1633,36 @@ export default function Home() {
                 </div>
                 <div className="space-y-4">
                   <input type="url" value={googleFormLink} onChange={(e) => setGoogleFormLink(e.target.value)} placeholder="Form URL" className="w-full glass-input px-4 py-3 rounded-lg text-sm" />
+                  <div className="space-y-3">
+                    <label className="block text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Audience</label>
+                    <select value={formAudienceMode} onChange={(event) => setFormAudienceMode(event.target.value as GoogleFormAudienceMode)} className="w-full appearance-none glass-input px-4 py-3 pr-10 rounded-lg text-sm">
+                      <option value="global">Global (visible to all moderators)</option>
+                      <option value="specific">Specific Moderator(s)</option>
+                    </select>
+                  </div>
+                  {formAudienceMode === "specific" && (
+                    <div className="space-y-2">
+                      <p className="text-xs uppercase tracking-widest text-[var(--muted)] font-medium">Select moderators</p>
+                      <div className="flex flex-wrap gap-2">
+                        {MODERATOR_NAMES.map((name) => {
+                          const checked = formRecipients.includes(name);
+                          return (
+                            <label key={name} className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-hover)]/70 px-3 py-2 text-sm text-[var(--text)]">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setFormRecipients((current) => (current.includes(name) ? current.filter((item) => item !== name) : [...current, name]));
+                                }}
+                                className="h-4 w-4 rounded border-[var(--border)] bg-transparent text-[var(--accent)]"
+                              />
+                              <span>{name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <button type="button" onClick={handleSaveGoogleForm} className="w-full bg-[var(--accent)] hover:bg-blue-600 text-white font-medium uppercase tracking-widest text-sm py-3 rounded-lg transition smooth-transition hover:shadow-lg hover:shadow-blue-500/20">
                     Save
                   </button>
